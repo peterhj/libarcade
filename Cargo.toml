@@ -1,0 +1,12 @@
+[package]
+name = "arcade"
+version = "0.0.1"
+authors = ["Peter Jin <peterhaijin@gmail.com>"]
+build = "build.rs"
+
+[lib]
+name = "arcade"
+path = "src/lib.rs"
+
+[dependencies]
+libc = "^0.2.*"
