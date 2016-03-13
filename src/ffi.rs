@@ -3,6 +3,12 @@ use libc::{c_char, c_uchar, c_int, c_float};
 pub enum ALEInterface {}
 pub enum ALEState {}
 
+#[link(name = "stdc++")]
+extern "C" {}
+
+#[link(name = "SDL")]
+extern "C" {}
+
 #[link(name = "ale_cffi_static", kind = "static")]
 extern "C" {
   pub fn ALEInterface_new() -> *mut ALEInterface;
@@ -18,6 +24,7 @@ extern "C" {
   pub fn ALEInterface_loadROM(ale: *mut ALEInterface, rom_file: *const c_char);
   pub fn ALEInterface_act(ale: *mut ALEInterface, action: c_int) -> c_int;
   pub fn ALEInterface_game_over(ale: *mut ALEInterface) -> c_int;
+  pub fn ALEInterface_reset_game(ale: *mut ALEInterface);
   pub fn ALEInterface_getLegalActionSet(ale: *mut ALEInterface, actions: *mut c_int);
   pub fn ALEInterface_getLegalActionSize(ale: *mut ALEInterface) -> c_int;
   pub fn ALEInterface_getMinimalActionSet(ale: *mut ALEInterface, actions: *mut c_int);

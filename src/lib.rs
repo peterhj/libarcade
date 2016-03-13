@@ -26,6 +26,21 @@ impl ArcadeContext {
     }
   }
 
+  pub fn set_string(&mut self, key: &str, value: &str) {
+    // FIXME(20160311)
+    unimplemented!();
+  }
+
+  pub fn set_int(&mut self, key: &str, value: i32) {
+    // FIXME(20160311)
+    unimplemented!();
+  }
+
+  pub fn set_bool(&mut self, key: &str, value: bool) {
+    // FIXME(20160311)
+    unimplemented!();
+  }
+
   pub fn open_rom(&mut self, path: &Path) -> Result<(), ()> {
     let path_osstr = path.as_os_str();
     let path_cstr = match path_osstr.to_cstring() {
@@ -36,8 +51,27 @@ impl ArcadeContext {
     Ok(())
   }
 
-  pub fn act(&mut self, action: i32) -> i32 {
-    unsafe { ALEInterface_act(self.ptr, action) }
+  pub fn reset(&mut self) {
+    unsafe { ALEInterface_reset_game(self.ptr) };
+  }
+
+  pub fn is_game_over(&mut self) -> bool {
+    match unsafe { ALEInterface_game_over(self.ptr) } {
+      0 => false,
+      _ => true,
+    }
+  }
+
+  pub fn num_lives(&mut self) -> i32 {
+    unsafe { ALEInterface_lives(self.ptr) }
+  }
+
+  pub fn frame_number(&mut self) -> i32 {
+    unsafe { ALEInterface_getFrameNumber(self.ptr) }
+  }
+
+  pub fn episode_frame_number(&mut self) -> i32 {
+    unsafe { ALEInterface_getEpisodeFrameNumber(self.ptr) }
   }
 
   pub fn num_legal_actions(&mut self) -> usize {
@@ -62,23 +96,8 @@ impl ArcadeContext {
     num_actions
   }
 
-  pub fn is_game_over(&mut self) -> bool {
-    match unsafe { ALEInterface_game_over(self.ptr) } {
-      0 => false,
-      _ => true,
-    }
-  }
-
-  pub fn num_lives(&mut self) -> i32 {
-    unsafe { ALEInterface_lives(self.ptr) }
-  }
-
-  pub fn frame_number(&mut self) -> i32 {
-    unsafe { ALEInterface_getFrameNumber(self.ptr) }
-  }
-
-  pub fn episode_frame_number(&mut self) -> i32 {
-    unsafe { ALEInterface_getEpisodeFrameNumber(self.ptr) }
+  pub fn act(&mut self, action: i32) -> i32 {
+    unsafe { ALEInterface_act(self.ptr, action) }
   }
 
   pub fn ram_size(&mut self) -> usize {
@@ -127,11 +146,11 @@ impl ArcadeContext {
     Ok(())
   }
 
-  pub fn checkpoint_state(&mut self) {
+  pub fn push_state(&mut self) {
     unsafe { ALEInterface_saveState(self.ptr) };
   }
 
-  pub fn rollback_state(&mut self) {
+  pub fn pop_state(&mut self) {
     unsafe { ALEInterface_loadState(self.ptr) };
   }
 
