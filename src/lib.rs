@@ -5,6 +5,7 @@ extern crate libc;
 use ffi::*;
 
 use libc::{c_int};
+use std::ffi::{CString};
 use std::path::{Path};
 
 pub mod ffi;
@@ -42,10 +43,10 @@ impl ArcadeContext {
   }
 
   pub fn open_rom(&mut self, path: &Path) -> Result<(), ()> {
-    let path_osstr = path.as_os_str();
-    let path_cstr = match path_osstr.to_cstring() {
-      Some(cstr) => cstr,
-      None => return Err(()),
+    //let path_osstr = path.as_os_str();
+    let path_cstr = match CString::new(path.to_str().unwrap().to_owned()) {
+      Ok(cstr) => cstr,
+      Err(_) => return Err(()),
     };
     unsafe { ALEInterface_loadROM(self.ptr, path_cstr.as_ptr()) };
     Ok(())
@@ -137,10 +138,10 @@ impl ArcadeContext {
   }
 
   pub fn dump_screen_png(&mut self, path: &Path) -> Result<(), ()> {
-    let path_osstr = path.as_os_str();
-    let path_cstr = match path_osstr.to_cstring() {
-      Some(cstr) => cstr,
-      None => return Err(()),
+    //let path_osstr = path.as_os_str();
+    let path_cstr = match CString::new(path.to_str().unwrap().to_owned()) {
+      Ok(cstr) => cstr,
+      Err(_) => return Err(()),
     };
     unsafe { ALEInterface_saveScreenPNG(self.ptr, path_cstr.as_ptr()) };
     Ok(())
