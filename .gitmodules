@@ -1,0 +1,4 @@
+[submodule "Arcade-Learning-Environment"]
+	path = Arcade-Learning-Environment
+	url = https://github.com/peterhj/Arcade-Learning-Environment.git
+	branch = peterhj-cffi

@@ -1,6 +1,9 @@
 #![feature(convert)]
 
+extern crate genrl;
+
 extern crate libc;
+extern crate rand;
 
 use ffi::*;
 
@@ -8,6 +11,7 @@ use libc::{c_int};
 use std::ffi::{CString};
 use std::path::{Path};
 
+pub mod env;
 pub mod ffi;
 
 pub struct ArcadeContext {
@@ -128,7 +132,7 @@ impl ArcadeContext {
   }
 
   pub fn extract_screen_rgb(&mut self, buf: &mut [u8]) {
-    assert!(buf.len() >= self.screen_size());
+    assert!(buf.len() >= self.screen_size() * 3);
     unsafe { ALEInterface_getScreenRGB(self.ptr, buf.as_mut_ptr()) };
   }
 
