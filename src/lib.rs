@@ -9,13 +9,14 @@ use ffi::*;
 
 use libc::{c_int};
 use std::ffi::{CString};
-use std::path::{Path};
+use std::path::{Path, PathBuf};
 
 pub mod env;
 pub mod ffi;
 
 pub struct ArcadeContext {
   ptr:  *mut ALEInterface,
+  cached_rom_path:  Option<PathBuf>,
 }
 
 impl Drop for ArcadeContext {
@@ -28,6 +29,7 @@ impl ArcadeContext {
   pub fn new() -> ArcadeContext {
     ArcadeContext{
       ptr:  unsafe { ALEInterface_new() },
+      cached_rom_path:  None,
     }
   }
 
@@ -46,13 +48,24 @@ impl ArcadeContext {
     unimplemented!();
   }
 
-  pub fn open_rom(&mut self, path: &Path) -> Result<(), ()> {
-    //let path_osstr = path.as_os_str();
-    let path_cstr = match CString::new(path.to_str().unwrap().to_owned()) {
-      Ok(cstr) => cstr,
-      Err(_) => return Err(()),
-    };
-    unsafe { ALEInterface_loadROM(self.ptr, path_cstr.as_ptr()) };
+  pub fn open_rom(&mut self, path: &Path, force: bool) -> Result<(), ()> {
+    let mut do_open = true;
+    if !force {
+      if let Some(ref cached_rom_path) = self.cached_rom_path {
+        if cached_rom_path == path {
+          do_open = false;
+        }
+      }
+    }
+    if do_open {
+      //let path_osstr = path.as_os_str();
+      let path_cstr = match CString::new(path.to_str().unwrap().to_owned()) {
+        Ok(cstr) => cstr,
+        Err(_) => return Err(()),
+      };
+      unsafe { ALEInterface_loadROM(self.ptr, path_cstr.as_ptr()) };
+      self.cached_rom_path = Some(PathBuf::from(path));
+    }
     Ok(())
   }
 
