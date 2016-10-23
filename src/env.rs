@@ -1,6 +1,7 @@
-use super::{ArcadeContext, ArcadeSavedState};
+use super::{CachedArcadeContext, ArcadeContext, ArcadeSavedState};
 
-use genrl::env::{Env, Action, DiscreteAction, EnvRepr, Discounted, NormalizeDiscounted};
+use genrl::env::{Env, Action, DiscreteAction, EnvInputRepr, EnvRepr, Discounted, NormalizeDiscounted};
+use operator::prelude::*;
 
 use rand::{Rng};
 use std::cell::{RefCell};
@@ -14,16 +15,18 @@ const MAX_ACTION:   u32   = 18;
 #[derive(Clone)]
 pub struct ArcadeConfig {
   pub skip_frames:  usize,
+  pub noop_max:     usize,
   pub rom_path:     PathBuf,
-  pub context:      Option<Rc<RefCell<ArcadeContext>>>,
+  pub cache:        Option<Rc<RefCell<CachedArcadeContext>>>,
 }
 
 impl Default for ArcadeConfig {
   fn default() -> ArcadeConfig {
     ArcadeConfig{
       skip_frames:  4,
+      noop_max:     30,
       rom_path:     PathBuf::from(""),
-      context:      None,
+      cache:        None,
     }
   }
 }
@@ -31,6 +34,12 @@ impl Default for ArcadeConfig {
 #[derive(Clone, Copy)]
 pub struct ArcadeAction {
   id:   i32,
+}
+
+impl ArcadeAction {
+  pub fn noop() -> ArcadeAction {
+    ArcadeAction{id: 0}
+  }
 }
 
 impl Action for ArcadeAction {
@@ -176,40 +185,51 @@ impl ArcadeFeatures for RgbArcadeFeatures {
   }
 }
 
-pub struct ArcadeEnv<F> {
+pub struct ArcadeEnvInner<F> {
   cfg:      ArcadeConfig,
-  context:  Option<Rc<RefCell<ArcadeContext>>>,
+  cache:    Option<Rc<RefCell<CachedArcadeContext>>>,
   state:    Option<ArcadeSavedState>,
   features: F,
+}
+
+pub struct ArcadeEnv<F> {
+  inner:    RefCell<ArcadeEnvInner<F>>,
 }
 
 impl<F> Default for ArcadeEnv<F> where F: ArcadeFeatures {
   fn default() -> ArcadeEnv<F> {
     ArcadeEnv{
-      cfg:      Default::default(),
-      context:  None,
-      state:    None,
-      features: Default::default(),
+      inner:    RefCell::new(ArcadeEnvInner{
+        cfg:        Default::default(),
+        cache:      None,
+        state:      None,
+        features:   Default::default(),
+      }),
     }
   }
 }
 
 impl<F> Clone for ArcadeEnv<F> where F: ArcadeFeatures {
   fn clone(&self) -> ArcadeEnv<F> {
-    if let Some(ref ctx) = self.context {
-      let state = ctx.borrow_mut().save_system_state();
+    let mut inner = self.inner.borrow_mut();
+    if let Some(ref cache) = inner.cache {
+      let state = cache.borrow_mut().context.save_system_state();
       ArcadeEnv{
-        cfg:      self.cfg.clone(),
-        context:  Some(ctx.clone()),
-        state:    Some(state),
-        features: self.features.clone(),
+        inner:    RefCell::new(ArcadeEnvInner{
+          cfg:        inner.cfg.clone(),
+          cache:      Some(cache.clone()),
+          state:      Some(state),
+          features:   inner.features.clone(),
+        }),
       }
     } else {
       ArcadeEnv{
-        cfg:      self.cfg.clone(),
-        context:  None,
-        state:    None,
-        features: self.features.clone(),
+        inner:    RefCell::new(ArcadeEnvInner{
+          cfg:        inner.cfg.clone(),
+          cache:      None,
+          state:      None,
+          features:   inner.features.clone(),
+        }),
       }
     }
   }
@@ -218,50 +238,92 @@ impl<F> Clone for ArcadeEnv<F> where F: ArcadeFeatures {
 impl<F> Env for ArcadeEnv<F> where F: ArcadeFeatures {
   type Init = ArcadeConfig;
   type Action = ArcadeAction;
-  //type Response = f32;
-  type Response = Discounted<f32>;
-  //type Response = NormalizeDiscounted<f32>;
+  type Response = f32;
 
-  fn reset<R>(&mut self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
-    let new_rom = init.rom_path != self.cfg.rom_path;
-    self.cfg = init.clone();
-    self.context = self.cfg.context.clone();
-    if new_rom {
-      assert!(self.context.as_ref().unwrap().borrow_mut().open_rom(&self.cfg.rom_path, false).is_ok());
+  fn reset<R>(&self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
+    let noop_frames = {
+      let mut inner = self.inner.borrow_mut();
+      inner.cfg = init.clone();
+      inner.cache = inner.cfg.cache.clone();
+      assert!(inner.cache.is_some());
+      let state = {
+        let cache = inner.cache.as_ref().unwrap();
+        let mut cache = cache.borrow_mut();
+        if cache.rom_path.is_none() || &inner.cfg.rom_path != cache.rom_path.as_ref().unwrap() {
+          assert!(cache.context.open_rom(&inner.cfg.rom_path).is_ok());
+          cache.rom_path = Some(inner.cfg.rom_path.clone());
+        }
+        cache.context.reset();
+        cache.context.save_system_state()
+      };
+      inner.state = Some(state);
+      inner.features.reset();
+      if inner.cfg.noop_max > 0 {
+        rng.gen_range(0, inner.cfg.noop_max + 1)
+      } else {
+        0
+      }
+    };
+    for _ in 0 .. noop_frames {
+      let _ = self.step(&ArcadeAction::noop()).unwrap();
     }
-    self.context.as_ref().unwrap().borrow_mut().reset();
-    self.state = Some(self.context.as_ref().unwrap().borrow_mut().save_system_state());
-    self.features.reset();
   }
 
-  fn is_terminal(&mut self) -> bool {
-    let is_term = self.context.as_ref().unwrap().borrow_mut().is_game_over();
+  fn is_terminal(&self) -> bool {
+    let mut inner = self.inner.borrow_mut();
+    assert!(inner.cache.is_some());
+    let cache = inner.cache.as_ref().unwrap();
+    let mut cache = cache.borrow_mut();
+    let is_term = cache.context.is_game_over();
     is_term
   }
 
-  fn is_legal_action(&mut self, action: &ArcadeAction) -> bool {
+  fn is_legal_action(&self, action: &ArcadeAction) -> bool {
     true
   }
 
-  //fn step(&mut self, action: &ArcadeAction) -> Result<Option<f32>, ()> {
-  fn step(&mut self, action: &ArcadeAction) -> Result<Option<Discounted<f32>>, ()> {
-  //fn step(&mut self, action: &ArcadeAction) -> Result<Option<NormalizeDiscounted<f32>>, ()> {
-    if let Some(ref state) = self.state {
-      self.context.as_ref().unwrap().borrow_mut().load_system_state(state);
+  fn step(&self, action: &ArcadeAction) -> Result<Option<f32>, ()> {
+    let mut inner = self.inner.borrow_mut();
+    let &mut ArcadeEnvInner{ref cfg, ref cache, ref mut state, ref mut features} = &mut *inner;
+    assert!(cache.is_some());
+    let cache = cache.as_ref().unwrap();
+    let mut cache = cache.borrow_mut();
+    if let &mut Some(ref mut state) = state {
+      cache.context.load_system_state(state);
     }
     let mut res = 0;
-    for _ in 0 .. self.cfg.skip_frames {
-      res += self.context.as_ref().unwrap().borrow_mut().act(action.id);
+    for _ in 0 .. cfg.skip_frames {
+      res += cache.context.act(action.id);
     }
-    self.state = Some(self.context.as_ref().unwrap().borrow_mut().save_system_state());
-    self.features.update(&mut *self.context.as_ref().unwrap().borrow_mut());
-    //Ok(Some(res as f32))
-    Ok(Some(Discounted::new(res as f32, 0.99)))
-    //Ok(Some(NormalizeDiscounted::new(res as f32, 0.99)))
+    // XXX: Clip rewards to positive or negative one.
+    if res > 0 {
+      res = 1;
+    } else if res < 0 {
+      res = -1;
+    }
+    *state = Some(cache.context.save_system_state());
+    features.update(&mut cache.context);
+    Ok(Some(res as f32))
   }
 }
 
-impl EnvRepr<u8> for ArcadeEnv<RamArcadeFeatures> {
+impl EnvInputRepr<[f32]> for ArcadeEnv<RamArcadeFeatures> {
+  fn _shape3d(&self) -> (usize, usize, usize) {
+    (1, 1, 128 * 4)
+  }
+}
+
+impl SampleExtractInput<[f32]> for ArcadeEnv<RamArcadeFeatures> {
+  fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
+    let inner = self.inner.borrow();
+    for p in 0 .. 128 * 4 {
+      output[p] = inner.features.obs_buf[p] as f32;
+    }
+    Ok(128 * 4)
+  }
+}
+
+/*impl EnvRepr<u8> for ArcadeEnv<RamArcadeFeatures> {
   fn observable_len(&mut self) -> usize {
     128 * 4
   }
@@ -293,4 +355,4 @@ impl EnvRepr<f32> for ArcadeEnv<GrayArcadeFeatures> {
       obs_buf[p] = self.features.obs_buf[p] as f32;
     }
   }
-}
+}*/

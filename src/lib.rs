@@ -1,6 +1,7 @@
 #![feature(convert)]
 
 extern crate genrl;
+extern crate operator;
 
 extern crate libc;
 extern crate rand;
@@ -14,9 +15,14 @@ use std::path::{Path, PathBuf};
 pub mod env;
 pub mod ffi;
 
+pub struct CachedArcadeContext {
+  pub context:  ArcadeContext,
+  pub rom_path: Option<PathBuf>,
+}
+
 pub struct ArcadeContext {
   ptr:  *mut ALEInterface,
-  cached_rom_path:  Option<PathBuf>,
+  //cached_rom_path:  Option<PathBuf>,
 }
 
 impl Drop for ArcadeContext {
@@ -29,7 +35,7 @@ impl ArcadeContext {
   pub fn new() -> ArcadeContext {
     ArcadeContext{
       ptr:  unsafe { ALEInterface_new() },
-      cached_rom_path:  None,
+      //cached_rom_path:  None,
     }
   }
 
@@ -48,8 +54,8 @@ impl ArcadeContext {
     unimplemented!();
   }
 
-  pub fn open_rom(&mut self, path: &Path, force: bool) -> Result<(), ()> {
-    let mut do_open = true;
+  pub fn open_rom(&mut self, path: &Path, /*force: bool*/) -> Result<(), ()> {
+    /*let mut do_open = true;
     if !force {
       if let Some(ref cached_rom_path) = self.cached_rom_path {
         if cached_rom_path == path {
@@ -57,15 +63,15 @@ impl ArcadeContext {
         }
       }
     }
-    if do_open {
+    if do_open {*/
       //let path_osstr = path.as_os_str();
       let path_cstr = match CString::new(path.to_str().unwrap().to_owned()) {
         Ok(cstr) => cstr,
         Err(_) => return Err(()),
       };
       unsafe { ALEInterface_loadROM(self.ptr, path_cstr.as_ptr()) };
-      self.cached_rom_path = Some(PathBuf::from(path));
-    }
+      //self.cached_rom_path = Some(PathBuf::from(path));
+    //}
     Ok(())
   }
 
@@ -178,7 +184,7 @@ impl ArcadeContext {
     }
   }
 
-  pub fn load_state(&mut self, state: &ArcadeSavedState) {
+  pub fn load_state(&mut self, state: &mut ArcadeSavedState) {
     unsafe { ALEInterface_restoreState(self.ptr, state.ptr) };
   }
 
@@ -188,7 +194,7 @@ impl ArcadeContext {
     }
   }
 
-  pub fn load_system_state(&mut self, state: &ArcadeSavedState) {
+  pub fn load_system_state(&mut self, state: &mut ArcadeSavedState) {
     unsafe { ALEInterface_restoreSystemState(self.ptr, state.ptr) };
   }
 }
