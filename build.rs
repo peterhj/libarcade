@@ -6,6 +6,9 @@ fn main() {
   let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
   let out_dir = env::var("OUT_DIR").unwrap();
 
+  let cc = env::var("CC").unwrap_or(format!("gcc"));
+  let cxx = env::var("CXX").unwrap_or(format!("g++"));
+
   let mut ale_lib_dst_path = PathBuf::from(&out_dir);
   ale_lib_dst_path.push("libale_cffi_static.a");
   if !ale_lib_dst_path.exists() {
@@ -13,6 +16,8 @@ fn main() {
     ale_src_path.push("Arcade-Learning-Environment");
     assert!(Command::new("cmake")
       .current_dir(&out_dir)
+      .env("CC",  &cc)
+      .env("CXX", &cxx)
       .arg("-DUSE_SDL=ON")
       .arg("-DUSE_RLGLUE=OFF")
       .arg("-DBUILD_EXAMPLES=OFF")

@@ -274,7 +274,7 @@ impl<F> Env for ArcadeEnv<F> where F: ArcadeFeatures {
     assert!(inner.cache.is_some());
     let cache = inner.cache.as_ref().unwrap();
     let mut cache = cache.borrow_mut();
-    let is_term = cache.context.is_game_over();
+    let is_term = cache.context.is_game_over() || cache.context.num_lives() < 1;
     is_term
   }
 
