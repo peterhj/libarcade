@@ -9,6 +9,12 @@ extern "C" {}
 #[link(name = "SDL")]
 extern "C" {}
 
+#[link(name = "png")]
+extern "C" {}
+
+#[link(name = "z")]
+extern "C" {}
+
 #[link(name = "ale_cffi_static", kind = "static")]
 extern "C" {
   pub fn ALEInterface_new() -> *mut ALEInterface;

@@ -245,10 +245,12 @@ impl<F> Env for ArcadeEnv<F> where F: ArcadeFeatures {
       let mut inner = self.inner.borrow_mut();
       let &mut ArcadeEnvInner{ref mut cache, ref mut cfg, ref mut state, ref mut features} = &mut *inner;
       *cfg = init.clone();
-      *cache = Some(Rc::new(RefCell::new(CachedArcadeContext{
-        context:      ArcadeContext::new(),
-        rom_path:     None,
-      })));
+      if cache.is_none() {
+        *cache = Some(Rc::new(RefCell::new(CachedArcadeContext{
+          context:      ArcadeContext::new(),
+          rom_path:     None,
+        })));
+      }
       assert!(cache.is_some());
       let cache = cache.as_ref().unwrap();
       let mut cache = cache.borrow_mut();
