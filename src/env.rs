@@ -118,8 +118,8 @@ impl Default for GrayArcadeFeatures {
       obs_buf.push(0);
     }
     GrayArcadeFeatures{
-      width:    210,
-      height:   160,
+      width:    160,
+      height:   210,
       window:   4,
       obs_buf:  obs_buf,
     }
@@ -154,13 +154,13 @@ pub struct RgbArcadeFeatures {
 
 impl Default for RgbArcadeFeatures {
   fn default() -> RgbArcadeFeatures {
-    let mut obs_buf = Vec::with_capacity(210 * 160 * 4);
-    for _ in 0 .. 210 * 160 * 4 {
+    let mut obs_buf = Vec::with_capacity(210 * 160 * 12);
+    for _ in 0 .. 210 * 160 * 12 {
       obs_buf.push(0);
     }
     RgbArcadeFeatures{
-      width:    210,
-      height:   160,
+      width:    160,
+      height:   210,
       window:   4,
       obs_buf:  obs_buf,
     }
@@ -232,6 +232,26 @@ impl<F> Clone for ArcadeEnv<F> where F: ArcadeFeatures {
         }),
       }
     }
+  }
+}
+
+impl<F> ArcadeEnv<F> where F: ArcadeFeatures {
+  pub fn num_minimal_actions(&self) -> usize {
+    let mut inner = self.inner.borrow_mut();
+    let &mut ArcadeEnvInner{ref cfg, ref cache, ref mut state, ref mut features} = &mut *inner;
+    assert!(cache.is_some());
+    let cache = cache.as_ref().unwrap();
+    let mut cache = cache.borrow_mut();
+    cache.context.num_minimal_actions()
+  }
+
+  pub fn extract_minimal_action_set(&self, actions: &mut [i32]) -> usize {
+    let mut inner = self.inner.borrow_mut();
+    let &mut ArcadeEnvInner{ref cfg, ref cache, ref mut state, ref mut features} = &mut *inner;
+    assert!(cache.is_some());
+    let cache = cache.as_ref().unwrap();
+    let mut cache = cache.borrow_mut();
+    cache.context.extract_minimal_action_set(actions)
   }
 }
 
@@ -346,7 +366,7 @@ impl SampleExtractInput<[f32]> for ArcadeEnv<RamArcadeFeatures> {
 
 impl EnvInputRepr<[f32]> for ArcadeEnv<GrayArcadeFeatures> {
   fn _shape3d(&self) -> (usize, usize, usize) {
-    (210, 160, 4)
+    (160, 210, 4)
   }
 }
 
@@ -357,6 +377,23 @@ impl SampleExtractInput<[f32]> for ArcadeEnv<GrayArcadeFeatures> {
       output[p] = inner.features.obs_buf[p] as f32;
     }
     Ok(210 * 160 * 4)
+  }
+}
+
+impl EnvInputRepr<[f32]> for ArcadeEnv<RgbArcadeFeatures> {
+  fn _shape3d(&self) -> (usize, usize, usize) {
+    (160, 210, 12)
+  }
+}
+
+impl SampleExtractInput<[f32]> for ArcadeEnv<RgbArcadeFeatures> {
+  fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
+    assert!(210 * 160 * 3 * 4 <= output.len());
+    let inner = self.inner.borrow();
+    for p in 0 .. 210 * 160 * 12 {
+      output[p] = inner.features.obs_buf[p] as f32;
+    }
+    Ok(210 * 160 * 12)
   }
 }
 
