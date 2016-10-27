@@ -33,10 +33,39 @@ impl Drop for ArcadeContext {
 
 impl ArcadeContext {
   pub fn new() -> ArcadeContext {
-    ArcadeContext{
+    let mut ctx = ArcadeContext{
       ptr:  unsafe { ALEInterface_new() },
       //cached_rom_path:  None,
+    };
+    println!("DEBUG: ctx: repeat_action_probability: {:?}", ctx.get_float("repeat_action_probability"));
+    println!("DEBUG: ctx: color_averaging: {:?}", ctx.get_bool("color_averaging"));
+    ctx
+  }
+
+  pub fn get_string(&mut self, key: &str) -> String {
+    unimplemented!();
+  }
+
+  pub fn get_int(&mut self, key: &str) -> i32 {
+    let mut c_key = CString::new(key.to_owned()).unwrap();
+    let res = unsafe { ALEInterface_getInt(self.ptr, c_key.as_ptr()) };
+    res
+  }
+
+  pub fn get_bool(&mut self, key: &str) -> bool {
+    let mut c_key = CString::new(key.to_owned()).unwrap();
+    let res = unsafe { ALEInterface_getBool(self.ptr, c_key.as_ptr()) };
+    match res {
+      0 => false,
+      1 => true,
+      _ => unreachable!(),
     }
+  }
+
+  pub fn get_float(&mut self, key: &str) -> f32 {
+    let mut c_key = CString::new(key.to_owned()).unwrap();
+    let res = unsafe { ALEInterface_getFloat(self.ptr, c_key.as_ptr()) };
+    res
   }
 
   pub fn set_string(&mut self, key: &str, value: &str) {
@@ -50,6 +79,11 @@ impl ArcadeContext {
   }
 
   pub fn set_bool(&mut self, key: &str, value: bool) {
+    // FIXME(20160311)
+    unimplemented!();
+  }
+
+  pub fn set_float(&mut self, key: &str, value: f32) {
     // FIXME(20160311)
     unimplemented!();
   }

@@ -165,7 +165,6 @@ pub type SpaceInvadersArcadeAction = SixArcadeAction;
 pub trait ArcadeFeatures: Clone + Default {
   fn reset(&mut self);
   fn resize(&mut self, history_len: usize);
-  fn window(&self) -> usize;
   fn update(&mut self, context: &mut ArcadeContext);
 }
 
@@ -198,12 +197,11 @@ impl ArcadeFeatures for RamArcadeFeatures {
   }
 
   fn resize(&mut self, history_len: usize) {
+    if self.window == history_len {
+      return;
+    }
     self.window = history_len;
     self.obs_buf.resize(128 * history_len, 0);
-  }
-
-  fn window(&self) -> usize {
-    self.window
   }
 
   fn update(&mut self, context: &mut ArcadeContext) {
@@ -248,12 +246,11 @@ impl ArcadeFeatures for GrayArcadeFeatures {
   }
 
   fn resize(&mut self, history_len: usize) {
+    if self.window == history_len {
+      return;
+    }
     self.window = history_len;
     self.obs_buf.resize(160 * 210 * history_len, 0);
-  }
-
-  fn window(&self) -> usize {
-    self.window
   }
 
   fn update(&mut self, context: &mut ArcadeContext) {
@@ -298,12 +295,11 @@ impl ArcadeFeatures for RgbArcadeFeatures {
   }
 
   fn resize(&mut self, history_len: usize) {
+    if self.window == history_len {
+      return;
+    }
     self.window = history_len;
     self.obs_buf.resize(3 * 160 * 210 * history_len, 0);
-  }
-
-  fn window(&self) -> usize {
-    self.window
   }
 
   fn update(&mut self, context: &mut ArcadeContext) {
@@ -317,11 +313,15 @@ impl ArcadeFeatures for RgbArcadeFeatures {
   }
 }
 
-pub struct MinifiedArcadeEnv<A> {
+pub struct MinifiedArcadeEnvInner<A> {
   cfg:      ArcadeConfig,
   history:  VecDeque<(ArcadeSavedState, A)>,
   state:    Option<ArcadeSavedState>,
   _marker:  PhantomData<A>,
+}
+
+pub struct MinifiedArcadeEnv<A> {
+  inner:    RefCell<MinifiedArcadeEnvInner<A>>,
 }
 
 pub struct ArcadeEnvInner<A, F> {
@@ -333,12 +333,36 @@ pub struct ArcadeEnvInner<A, F> {
 }
 
 impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
-  pub fn deminify(mini_env: &mut MinifiedArcadeEnv<A>) -> ArcadeEnvInner<A, F> {
-    let mut features = F::default();
-    features.resize(mini_env.cfg.history_len);
-    features.reset();
-    // FIXME(20161026)
-    unimplemented!();
+  pub fn deminify(mini_env: &MinifiedArcadeEnv<A>) -> ArcadeEnv<A, F> {
+    CONTEXT.with(|ctx| {
+      let mut ctx = ctx.borrow_mut();
+      let mut mini_env = mini_env.inner.borrow_mut();
+      let mut features = F::default();
+      features.resize(mini_env.cfg.history_len);
+      features.reset();
+      let mut new_history = VecDeque::with_capacity(4);
+      for h in mini_env.history.iter_mut() {
+        ctx.load_system_state(&mut h.0);
+        features.update(&mut ctx);
+        new_history.push_back((ctx.save_system_state(), h.1));
+      }
+      let new_state = if let Some(ref mut state) = mini_env.state {
+        ctx.load_system_state(state);
+        features.update(&mut ctx);
+        Some(ctx.save_system_state())
+      } else {
+        None
+      };
+      ArcadeEnv{
+        inner:  RefCell::new(ArcadeEnvInner{
+          cfg:      mini_env.cfg.clone(),
+          history:  new_history,
+          state:    new_state,
+          features: features,
+          _marker:  PhantomData,
+        }),
+      }
+    })
   }
 
   pub fn minify(&mut self) -> MinifiedArcadeEnv<A> {
@@ -356,17 +380,19 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
         None
       };
       MinifiedArcadeEnv{
-        cfg:        self.cfg.clone(),
-        history:    new_history,
-        state:      new_state,
-        _marker:    PhantomData,
+        inner: RefCell::new(MinifiedArcadeEnvInner{
+          cfg:      self.cfg.clone(),
+          history:  new_history,
+          state:    new_state,
+          _marker:  PhantomData,
+        }),
       }
     })
   }
 
   pub fn reset<R>(&mut self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
     let noop_frames = {
-      let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = &mut *self;
+      let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = self;
       *cfg = init.clone();
       CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
@@ -397,8 +423,8 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
   }
 
   pub fn is_terminal(&mut self) -> bool {
-    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = &mut *self;
     CONTEXT.with(|ctx| {
+      let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = self;
       let mut ctx = ctx.borrow_mut();
       if let &mut Some(ref mut state) = state {
         ctx.load_system_state(state);
@@ -411,16 +437,16 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
   }
 
   pub fn step(&mut self, action: &A) -> Result<Option<f32>, ()> {
-    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut history, ref mut features, ..} = &mut *self;
     CONTEXT.with(|ctx| {
+      let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut history, ref mut features, ..} = self;
       let mut ctx = ctx.borrow_mut();
       if let &mut Some(ref mut state) = state {
         ctx.load_system_state(state);
       } else {
         unreachable!();
       }
-      assert!(history.len() <= features.window());
-      if history.len() == features.window() {
+      assert!(history.len() <= self.cfg.history_len);
+      if history.len() == self.cfg.history_len {
         let _ = history.pop_front();
       }
       history.push_back((ctx.save_system_state(), *action));
