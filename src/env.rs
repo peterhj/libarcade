@@ -5,6 +5,7 @@ use operator::prelude::*;
 
 use rand::{Rng};
 use std::cell::{RefCell};
+use std::collections::{VecDeque};
 use std::marker::{PhantomData};
 use std::path::{PathBuf};
 use std::rc::{Rc};
@@ -19,6 +20,7 @@ const NUM_ACTIONS:  usize = 18;
 
 #[derive(Clone, Debug)]
 pub struct ArcadeConfig {
+  pub history_len:  usize,
   pub skip_frames:  usize,
   pub noop_max:     usize,
   pub rom_path:     PathBuf,
@@ -27,8 +29,9 @@ pub struct ArcadeConfig {
 impl Default for ArcadeConfig {
   fn default() -> ArcadeConfig {
     ArcadeConfig{
+      history_len:  4,
       skip_frames:  4,
-      noop_max:     0,
+      noop_max:     30,
       rom_path:     PathBuf::from(""),
     }
   }
@@ -74,29 +77,29 @@ impl GenericArcadeAction for ArcadeAction {
   }
 }
 
+const FOUR_ACTION_IDS: [i32; 4] = [0, 1, 3, 4];
+
 #[derive(Clone, Copy)]
-pub struct PongArcadeAction {
+pub struct FourArcadeAction {
   idx:  u32,
 }
 
-impl PongArcadeAction {
-  pub fn noop() -> PongArcadeAction {
-    PongArcadeAction{idx: 0}
+impl FourArcadeAction {
+  pub fn noop() -> FourArcadeAction {
+    FourArcadeAction{idx: 0}
   }
 }
 
-const PONG_ACTION_IDS: [i32; 6] = [0, 1, 3, 4, 11, 12];
-
-impl Action for PongArcadeAction {
+impl Action for FourArcadeAction {
   fn dim() -> usize {
     6
   }
 }
 
-impl DiscreteAction for PongArcadeAction {
-  fn from_idx(idx: u32) -> PongArcadeAction {
+impl DiscreteAction for FourArcadeAction {
+  fn from_idx(idx: u32) -> FourArcadeAction {
     assert!(idx < Self::dim() as u32);
-    PongArcadeAction{idx: idx}
+    FourArcadeAction{idx: idx}
   }
 
   fn idx(&self) -> u32 {
@@ -104,18 +107,65 @@ impl DiscreteAction for PongArcadeAction {
   }
 }
 
-impl GenericArcadeAction for PongArcadeAction {
-  fn noop() -> PongArcadeAction {
-    PongArcadeAction{idx: 0}
+impl GenericArcadeAction for FourArcadeAction {
+  fn noop() -> FourArcadeAction {
+    FourArcadeAction{idx: 0}
   }
 
   fn id(&self) -> i32 {
-    PONG_ACTION_IDS[self.idx as usize]
+    FOUR_ACTION_IDS[self.idx as usize]
   }
 }
 
+pub type BreakoutArcadeAction = FourArcadeAction;
+
+const SIX_ACTION_IDS: [i32; 6] = [0, 1, 3, 4, 11, 12];
+
+#[derive(Clone, Copy)]
+pub struct SixArcadeAction {
+  idx:  u32,
+}
+
+impl SixArcadeAction {
+  pub fn noop() -> SixArcadeAction {
+    SixArcadeAction{idx: 0}
+  }
+}
+
+impl Action for SixArcadeAction {
+  fn dim() -> usize {
+    6
+  }
+}
+
+impl DiscreteAction for SixArcadeAction {
+  fn from_idx(idx: u32) -> SixArcadeAction {
+    assert!(idx < Self::dim() as u32);
+    SixArcadeAction{idx: idx}
+  }
+
+  fn idx(&self) -> u32 {
+    self.idx
+  }
+}
+
+impl GenericArcadeAction for SixArcadeAction {
+  fn noop() -> SixArcadeAction {
+    SixArcadeAction{idx: 0}
+  }
+
+  fn id(&self) -> i32 {
+    SIX_ACTION_IDS[self.idx as usize]
+  }
+}
+
+pub type PongArcadeAction = SixArcadeAction;
+pub type SpaceInvadersArcadeAction = SixArcadeAction;
+
 pub trait ArcadeFeatures: Clone + Default {
   fn reset(&mut self);
+  fn resize(&mut self, history_len: usize);
+  fn window(&self) -> usize;
   fn update(&mut self, context: &mut ArcadeContext);
 }
 
@@ -145,6 +195,15 @@ impl ArcadeFeatures for RamArcadeFeatures {
     for p in 0 .. self.stride * self.window {
       self.obs_buf[p] = 0;
     }
+  }
+
+  fn resize(&mut self, history_len: usize) {
+    self.window = history_len;
+    self.obs_buf.resize(128 * history_len, 0);
+  }
+
+  fn window(&self) -> usize {
+    self.window
   }
 
   fn update(&mut self, context: &mut ArcadeContext) {
@@ -188,6 +247,15 @@ impl ArcadeFeatures for GrayArcadeFeatures {
     }
   }
 
+  fn resize(&mut self, history_len: usize) {
+    self.window = history_len;
+    self.obs_buf.resize(160 * 210 * history_len, 0);
+  }
+
+  fn window(&self) -> usize {
+    self.window
+  }
+
   fn update(&mut self, context: &mut ArcadeContext) {
     let frame_sz = context.screen_size();
     assert_eq!(self.width * self.height, frame_sz);
@@ -229,6 +297,15 @@ impl ArcadeFeatures for RgbArcadeFeatures {
     }
   }
 
+  fn resize(&mut self, history_len: usize) {
+    self.window = history_len;
+    self.obs_buf.resize(3 * 160 * 210 * history_len, 0);
+  }
+
+  fn window(&self) -> usize {
+    self.window
+  }
+
   fn update(&mut self, context: &mut ArcadeContext) {
     let frame_sz = context.screen_size() * 3;
     assert_eq!(self.width * self.height * 3, frame_sz);
@@ -240,11 +317,123 @@ impl ArcadeFeatures for RgbArcadeFeatures {
   }
 }
 
+pub struct MinifiedArcadeEnv<A> {
+  cfg:      ArcadeConfig,
+  history:  VecDeque<(ArcadeSavedState, A)>,
+  state:    Option<ArcadeSavedState>,
+  _marker:  PhantomData<A>,
+}
+
 pub struct ArcadeEnvInner<A, F> {
   cfg:      ArcadeConfig,
+  history:  VecDeque<(ArcadeSavedState, A)>,
   state:    Option<ArcadeSavedState>,
   features: F,
   _marker:  PhantomData<A>,
+}
+
+impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+  pub fn deminify(mini_env: &mut MinifiedArcadeEnv<A>) -> ArcadeEnvInner<A, F> {
+    let mut features = F::default();
+    features.resize(mini_env.cfg.history_len);
+    features.reset();
+    // FIXME(20161026)
+    unimplemented!();
+  }
+
+  pub fn minify(&mut self) -> MinifiedArcadeEnv<A> {
+    CONTEXT.with(|ctx| {
+      let mut ctx = ctx.borrow_mut();
+      let mut new_history = VecDeque::with_capacity(4);
+      for h in self.history.iter_mut() {
+        ctx.load_system_state(&mut h.0);
+        new_history.push_back((ctx.save_system_state(), h.1));
+      }
+      let new_state = if let Some(ref mut state) = self.state {
+        ctx.load_system_state(state);
+        Some(ctx.save_system_state())
+      } else {
+        None
+      };
+      MinifiedArcadeEnv{
+        cfg:        self.cfg.clone(),
+        history:    new_history,
+        state:      new_state,
+        _marker:    PhantomData,
+      }
+    })
+  }
+
+  pub fn reset<R>(&mut self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
+    let noop_frames = {
+      let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = &mut *self;
+      *cfg = init.clone();
+      CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ROM_PATH.with(|rom_path| {
+          let mut rom_path = rom_path.borrow_mut();
+      //if cache.rom_path.is_none() || &cfg.rom_path != cache.rom_path.as_ref().unwrap() {
+          if rom_path.is_none() || &cfg.rom_path != rom_path.as_ref().unwrap() {
+            assert!(ctx.open_rom(&cfg.rom_path).is_ok());
+            *rom_path = Some(cfg.rom_path.clone());
+          }
+        });
+        ctx.reset();
+        let saved_state = ctx.save_system_state();
+        *state = Some(saved_state);
+        history.clear();
+        features.reset();
+        features.update(&mut ctx);
+      });
+      if cfg.noop_max > 0 {
+        rng.gen_range(0, cfg.noop_max + 1)
+      } else {
+        0
+      }
+    };
+    for _ in 0 .. noop_frames {
+      let _ = self.step(&A::noop()).unwrap();
+    }
+  }
+
+  pub fn is_terminal(&mut self) -> bool {
+    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = &mut *self;
+    CONTEXT.with(|ctx| {
+      let mut ctx = ctx.borrow_mut();
+      if let &mut Some(ref mut state) = state {
+        ctx.load_system_state(state);
+      } else {
+        unreachable!();
+      }
+      let is_term = ctx.is_game_over();
+      is_term
+    })
+  }
+
+  pub fn step(&mut self, action: &A) -> Result<Option<f32>, ()> {
+    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut history, ref mut features, ..} = &mut *self;
+    CONTEXT.with(|ctx| {
+      let mut ctx = ctx.borrow_mut();
+      if let &mut Some(ref mut state) = state {
+        ctx.load_system_state(state);
+      } else {
+        unreachable!();
+      }
+      assert!(history.len() <= features.window());
+      if history.len() == features.window() {
+        let _ = history.pop_front();
+      }
+      history.push_back((ctx.save_system_state(), *action));
+      let mut res = 0;
+      for _ in 0 .. cfg.skip_frames {
+        let r = ctx.act(action.id());
+        res += r;
+      }
+      *state = Some(ctx.save_system_state());
+      features.update(&mut ctx);
+      Ok(Some(res as f32))
+    })
+  }
 }
 
 pub struct ArcadeEnv<A, F> {
@@ -257,6 +446,7 @@ impl<A, F> Default for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFe
       inner:    RefCell::new(ArcadeEnvInner{
         cfg:        Default::default(),
         state:      None,
+        history:    VecDeque::with_capacity(4),
         features:   Default::default(),
         _marker:    PhantomData,
       }),
@@ -269,11 +459,22 @@ impl<A, F> Clone for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeat
     let mut inner = self.inner.borrow_mut();
     CONTEXT.with(|ctx| {
       let mut ctx = ctx.borrow_mut();
-      let state = ctx.save_system_state();
+      let mut new_history = VecDeque::with_capacity(4);
+      for h in inner.history.iter_mut() {
+        ctx.load_system_state(&mut h.0);
+        new_history.push_back((ctx.save_system_state(), h.1));
+      }
+      let new_state = if let Some(ref mut state) = inner.state {
+        ctx.load_system_state(state);
+        Some(ctx.save_system_state())
+      } else {
+        None
+      };
       ArcadeEnv{
         inner:  RefCell::new(ArcadeEnvInner{
           cfg:      inner.cfg.clone(),
-          state:    Some(state),
+          history:  new_history,
+          state:    new_state,
           features: inner.features.clone(),
           _marker:  PhantomData,
         }),
@@ -283,6 +484,11 @@ impl<A, F> Clone for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeat
 }
 
 impl<A, F> ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+  pub fn _state_size(&self) -> usize {
+    let mut inner = self.inner.borrow_mut();
+    inner.state.as_mut().unwrap().encoded_size()
+  }
+
   pub fn num_minimal_actions(&self) -> usize {
     let mut inner = self.inner.borrow_mut();
     CONTEXT.with(|ctx| {
@@ -305,50 +511,13 @@ impl<A, F> Env for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatur
   type Response = f32;
 
   fn reset<R>(&self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
-    let noop_frames = {
-      let mut inner = self.inner.borrow_mut();
-      let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut features, ..} = &mut *inner;
-      *cfg = init.clone();
-      CONTEXT.with(|ctx| {
-        let mut ctx = ctx.borrow_mut();
-        ROM_PATH.with(|rom_path| {
-          let mut rom_path = rom_path.borrow_mut();
-      //if cache.rom_path.is_none() || &cfg.rom_path != cache.rom_path.as_ref().unwrap() {
-          if rom_path.is_none() || &cfg.rom_path != rom_path.as_ref().unwrap() {
-            assert!(ctx.open_rom(&cfg.rom_path).is_ok());
-            *rom_path = Some(cfg.rom_path.clone());
-          }
-        });
-        ctx.reset();
-        let saved_state = ctx.save_system_state();
-        *state = Some(saved_state);
-        features.reset();
-        features.update(&mut ctx);
-      });
-      if cfg.noop_max > 0 {
-        rng.gen_range(0, cfg.noop_max + 1)
-      } else {
-        0
-      }
-    };
-    for _ in 0 .. noop_frames {
-      let _ = self.step(&A::noop()).unwrap();
-    }
+    let mut inner = self.inner.borrow_mut();
+    inner.reset(init, rng);
   }
 
   fn is_terminal(&self) -> bool {
     let mut inner = self.inner.borrow_mut();
-    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = &mut *inner;
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      if let &mut Some(ref mut state) = state {
-        ctx.load_system_state(state);
-      } else {
-        unreachable!();
-      }
-      let is_term = ctx.is_game_over();
-      is_term
-    })
+    inner.is_terminal()
   }
 
   fn is_legal_action(&self, action: &A) -> bool {
@@ -357,23 +526,7 @@ impl<A, F> Env for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatur
 
   fn step(&self, action: &A) -> Result<Option<f32>, ()> {
     let mut inner = self.inner.borrow_mut();
-    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = &mut *inner;
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      if let &mut Some(ref mut state) = state {
-        ctx.load_system_state(state);
-      } else {
-        unreachable!();
-      }
-      let mut res = 0;
-      for _ in 0 .. cfg.skip_frames {
-        let r = ctx.act(action.id());
-        res += r;
-      }
-      *state = Some(ctx.save_system_state());
-      features.update(&mut ctx);
-      Ok(Some(res as f32))
-    })
+    inner.step(action)
   }
 }
 
@@ -423,151 +576,5 @@ impl<A> SampleExtractInput<[f32]> for ArcadeEnv<A, RgbArcadeFeatures> where A: G
       output[p] = inner.features.obs_buf[p] as f32;
     }
     Ok(210 * 160 * 12)
-  }
-}
-
-pub struct SharedArcadeEnv<A, F> {
-  inner:    Mutex<ArcadeEnvInner<A, F>>,
-}
-
-impl<A, F> Default for SharedArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
-  fn default() -> SharedArcadeEnv<A, F> {
-    SharedArcadeEnv{
-      inner:    Mutex::new(ArcadeEnvInner{
-        cfg:        Default::default(),
-        state:      None,
-        features:   Default::default(),
-        _marker:    PhantomData,
-      }),
-    }
-  }
-}
-
-impl<A, F> Clone for SharedArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
-  fn clone(&self) -> SharedArcadeEnv<A, F> {
-    let mut inner = self.inner.lock().unwrap();
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      let state = ctx.save_system_state();
-      SharedArcadeEnv{
-        inner:  Mutex::new(ArcadeEnvInner{
-          cfg:      inner.cfg.clone(),
-          state:    Some(state),
-          features: inner.features.clone(),
-          _marker:  PhantomData,
-        }),
-      }
-    })
-  }
-}
-
-impl<A, F> SharedArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
-  pub fn num_minimal_actions(&self) -> usize {
-    let mut inner = self.inner.lock().unwrap();
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      ctx.num_minimal_actions()
-    })
-  }
-
-  pub fn extract_minimal_action_set(&self, actions: &mut [i32]) -> usize {
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      ctx.extract_minimal_action_set(actions)
-    })
-  }
-}
-
-impl<A, F> Env for SharedArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
-  type Init = ArcadeConfig;
-  type Action = A;
-  type Response = f32;
-
-  fn reset<R>(&self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
-    let noop_frames = {
-      let mut inner = self.inner.lock().unwrap();
-      let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut features, ..} = &mut *inner;
-      *cfg = init.clone();
-      CONTEXT.with(|ctx| {
-        let mut ctx = ctx.borrow_mut();
-        ROM_PATH.with(|rom_path| {
-          let mut rom_path = rom_path.borrow_mut();
-      //if cache.rom_path.is_none() || &cfg.rom_path != cache.rom_path.as_ref().unwrap() {
-          if rom_path.is_none() || &cfg.rom_path != rom_path.as_ref().unwrap() {
-            assert!(ctx.open_rom(&cfg.rom_path).is_ok());
-            *rom_path = Some(cfg.rom_path.clone());
-          }
-        });
-        ctx.reset();
-        let saved_state = ctx.save_system_state();
-        *state = Some(saved_state);
-        features.reset();
-        features.update(&mut ctx);
-      });
-      if cfg.noop_max > 0 {
-        rng.gen_range(0, cfg.noop_max + 1)
-      } else {
-        0
-      }
-    };
-    for _ in 0 .. noop_frames {
-      let _ = self.step(&A::noop()).unwrap();
-    }
-  }
-
-  fn is_terminal(&self) -> bool {
-    let mut inner = self.inner.lock().unwrap();
-    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = &mut *inner;
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      if let &mut Some(ref mut state) = state {
-        ctx.load_system_state(state);
-      } else {
-        unreachable!();
-      }
-      let is_term = ctx.is_game_over();
-      is_term
-    })
-  }
-
-  fn is_legal_action(&self, action: &A) -> bool {
-    true
-  }
-
-  fn step(&self, action: &A) -> Result<Option<f32>, ()> {
-    let mut inner = self.inner.lock().unwrap();
-    let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = &mut *inner;
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      if let &mut Some(ref mut state) = state {
-        ctx.load_system_state(state);
-      } else {
-        unreachable!();
-      }
-      let mut res = 0;
-      for _ in 0 .. cfg.skip_frames {
-        let r = ctx.act(action.id());
-        res += r;
-      }
-      *state = Some(ctx.save_system_state());
-      features.update(&mut ctx);
-      Ok(Some(res as f32))
-    })
-  }
-}
-
-impl<A> EnvInputRepr<[f32]> for SharedArcadeEnv<A, GrayArcadeFeatures> where A: GenericArcadeAction {
-  fn _shape3d(&self) -> (usize, usize, usize) {
-    (160, 210, 4)
-  }
-}
-
-impl<A> SampleExtractInput<[f32]> for SharedArcadeEnv<A, GrayArcadeFeatures> where A: GenericArcadeAction {
-  fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
-    let inner = self.inner.lock().unwrap();
-    for p in 0 .. 210 * 160 * 4 {
-      output[p] = inner.features.obs_buf[p] as f32;
-    }
-    Ok(210 * 160 * 4)
   }
 }
