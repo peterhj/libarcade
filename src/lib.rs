@@ -2,6 +2,7 @@
 
 extern crate genrl;
 extern crate operator;
+extern crate stb_image;
 
 extern crate libc;
 extern crate rand;
@@ -37,6 +38,7 @@ impl ArcadeContext {
       ptr:  unsafe { ALEInterface_new() },
       //cached_rom_path:  None,
     };
+    println!("DEBUG: ctx: frame_skip: {:?}", ctx.get_int("frame_skip"));
     println!("DEBUG: ctx: repeat_action_probability: {:?}", ctx.get_float("repeat_action_probability"));
     println!("DEBUG: ctx: color_averaging: {:?}", ctx.get_bool("color_averaging"));
     ctx
@@ -47,13 +49,13 @@ impl ArcadeContext {
   }
 
   pub fn get_int(&mut self, key: &str) -> i32 {
-    let mut c_key = CString::new(key.to_owned()).unwrap();
+    let c_key = CString::new(key.to_owned()).unwrap();
     let res = unsafe { ALEInterface_getInt(self.ptr, c_key.as_ptr()) };
     res
   }
 
   pub fn get_bool(&mut self, key: &str) -> bool {
-    let mut c_key = CString::new(key.to_owned()).unwrap();
+    let c_key = CString::new(key.to_owned()).unwrap();
     let res = unsafe { ALEInterface_getBool(self.ptr, c_key.as_ptr()) };
     match res {
       0 => false,
@@ -63,7 +65,7 @@ impl ArcadeContext {
   }
 
   pub fn get_float(&mut self, key: &str) -> f32 {
-    let mut c_key = CString::new(key.to_owned()).unwrap();
+    let c_key = CString::new(key.to_owned()).unwrap();
     let res = unsafe { ALEInterface_getFloat(self.ptr, c_key.as_ptr()) };
     res
   }
@@ -74,18 +76,22 @@ impl ArcadeContext {
   }
 
   pub fn set_int(&mut self, key: &str, value: i32) {
-    // FIXME(20160311)
-    unimplemented!();
+    let c_key = CString::new(key.to_owned()).unwrap();
+    unsafe { ALEInterface_setInt(self.ptr, c_key.as_ptr(), value) };
   }
 
   pub fn set_bool(&mut self, key: &str, value: bool) {
-    // FIXME(20160311)
-    unimplemented!();
+    let c_key = CString::new(key.to_owned()).unwrap();
+    let v = match value {
+      false => 0,
+      true  => 1,
+    };
+    unsafe { ALEInterface_setBool(self.ptr, c_key.as_ptr(), v) };
   }
 
   pub fn set_float(&mut self, key: &str, value: f32) {
-    // FIXME(20160311)
-    unimplemented!();
+    let c_key = CString::new(key.to_owned()).unwrap();
+    unsafe { ALEInterface_setFloat(self.ptr, c_key.as_ptr(), value) };
   }
 
   pub fn open_rom(&mut self, path: &Path, /*force: bool*/) -> Result<(), ()> {

@@ -2,12 +2,15 @@ use super::{CachedArcadeContext, ArcadeContext, ArcadeSavedState};
 
 use genrl::env::{Env, Action, DiscreteAction, EnvInputRepr, EnvRepr, Discounted, NormalizeDiscounted};
 use operator::prelude::*;
+use stb_image::image::{Image};
 
 use rand::{Rng};
 use std::cell::{RefCell};
 use std::collections::{VecDeque};
+use std::fs::{File};
+use std::io::{Write};
 use std::marker::{PhantomData};
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 use std::rc::{Rc};
 use std::sync::{Mutex};
 
@@ -166,6 +169,7 @@ pub trait ArcadeFeatures: Clone + Default {
   fn reset(&mut self);
   fn resize(&mut self, history_len: usize);
   fn update(&mut self, context: &mut ArcadeContext);
+  fn obs(&self) -> &[u8];
 }
 
 #[derive(Clone)]
@@ -212,6 +216,10 @@ impl ArcadeFeatures for RamArcadeFeatures {
       post_buf[ .. self.stride].copy_from_slice(&pre_buf[frame * self.stride .. ]);
     }
     context.extract_ram(&mut self.obs_buf[ .. self.stride]);
+  }
+
+  fn obs(&self) -> &[u8] {
+    &self.obs_buf
   }
 }
 
@@ -262,6 +270,65 @@ impl ArcadeFeatures for GrayArcadeFeatures {
     }
     context.extract_screen_grayscale(&mut self.obs_buf[ .. frame_sz]);
   }
+
+  fn obs(&self) -> &[u8] {
+    &self.obs_buf
+  }
+}
+
+#[derive(Clone)]
+pub struct RevGrayArcadeFeatures {
+  width:    usize,
+  height:   usize,
+  window:   usize,
+  obs_buf:  Vec<u8>,
+}
+
+impl Default for RevGrayArcadeFeatures {
+  fn default() -> RevGrayArcadeFeatures {
+    let mut obs_buf = Vec::with_capacity(210 * 160 * 4);
+    for _ in 0 .. 210 * 160 * 4 {
+      obs_buf.push(0);
+    }
+    RevGrayArcadeFeatures{
+      width:    160,
+      height:   210,
+      window:   4,
+      obs_buf:  obs_buf,
+    }
+  }
+}
+
+impl ArcadeFeatures for RevGrayArcadeFeatures {
+  fn reset(&mut self) {
+    for p in 0 .. self.width * self.height * self.window {
+      self.obs_buf[p] = 0;
+    }
+  }
+
+  fn resize(&mut self, history_len: usize) {
+    if self.window == history_len {
+      return;
+    }
+    self.window = history_len;
+    self.obs_buf.resize(160 * 210 * history_len, 0);
+  }
+
+  fn update(&mut self, context: &mut ArcadeContext) {
+    let frame_sz = context.screen_size();
+    assert_eq!(self.width * self.height, frame_sz);
+    for frame in (0 .. self.window-1) {
+      let (pre_buf, post_buf) = self.obs_buf.split_at_mut((frame+1) * frame_sz);
+      //post_buf[ .. frame_sz].copy_from_slice(&pre_buf[frame * frame_sz .. ]);
+      pre_buf[frame * frame_sz .. (frame+1) * frame_sz].copy_from_slice(&post_buf[ .. frame_sz]);
+    }
+    //context.extract_screen_grayscale(&mut self.obs_buf[ .. frame_sz]);
+    context.extract_screen_grayscale(&mut self.obs_buf[(self.window-1) * frame_sz .. ]);
+  }
+
+  fn obs(&self) -> &[u8] {
+    &self.obs_buf
+  }
 }
 
 #[derive(Clone)]
@@ -310,6 +377,10 @@ impl ArcadeFeatures for RgbArcadeFeatures {
       post_buf[ .. frame_sz].copy_from_slice(&pre_buf[frame * frame_sz .. ]);
     }
     context.extract_screen_rgb(&mut self.obs_buf[ .. frame_sz]);
+  }
+
+  fn obs(&self) -> &[u8] {
+    &self.obs_buf
   }
 }
 
@@ -391,6 +462,7 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
   }
 
   pub fn reset<R>(&mut self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
+    //println!("DEBUG: restarting...");
     let noop_frames = {
       let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = self;
       *cfg = init.clone();
@@ -398,7 +470,6 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
         let mut ctx = ctx.borrow_mut();
         ROM_PATH.with(|rom_path| {
           let mut rom_path = rom_path.borrow_mut();
-      //if cache.rom_path.is_none() || &cfg.rom_path != cache.rom_path.as_ref().unwrap() {
           if rom_path.is_none() || &cfg.rom_path != rom_path.as_ref().unwrap() {
             assert!(ctx.open_rom(&cfg.rom_path).is_ok());
             *rom_path = Some(cfg.rom_path.clone());
@@ -411,10 +482,13 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
         features.reset();
         features.update(&mut ctx);
       });
-      if cfg.noop_max > 0 {
-        rng.gen_range(0, cfg.noop_max + 1)
+      // XXX(20161028): We want all frames in the input to have something
+      // rather than have any zero padding. Also, add one to the history length
+      // in case of color averaging.
+      if cfg.noop_max > cfg.history_len + 1 {
+        rng.gen_range(cfg.history_len + 1, cfg.noop_max + 1)
       } else {
-        0
+        cfg.history_len + 1
       }
     };
     for _ in 0 .. noop_frames {
@@ -450,15 +524,36 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
         let _ = history.pop_front();
       }
       history.push_back((ctx.save_system_state(), *action));
-      let mut res = 0;
+      // FIXME(20161027): Move frame skipping into the "ale.cfg" file.
+      /*let mut res = 0;
       for _ in 0 .. cfg.skip_frames {
         let r = ctx.act(action.id());
         res += r;
-      }
+      }*/
+      let res = ctx.act(action.id());
       *state = Some(ctx.save_system_state());
       features.update(&mut ctx);
       Ok(Some(res as f32))
     })
+  }
+
+  pub fn save_png(&mut self, path: &Path) {
+    let frame_sz = 160 * 210;
+    let mut pixels = Vec::with_capacity(3 * frame_sz);
+    for &x in &self.features.obs()[ .. frame_sz] {
+      let y = x as i32;
+      assert!(y >= 0 && y <= 255);
+      pixels.push(y as u8);
+      pixels.push(y as u8);
+      pixels.push(y as u8);
+    }
+    let im = Image::new(160, 210, 3, pixels);
+    let png_buf = match im.write_png() {
+      Err(_) => panic!("failed to generate png"),
+      Ok(png) => png,
+    };
+    let mut f = File::create(path).unwrap();
+    f.write_all(&png_buf).unwrap();
   }
 }
 
@@ -554,6 +649,11 @@ impl<A, F> Env for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatur
     let mut inner = self.inner.borrow_mut();
     inner.step(action)
   }
+
+  fn _save_png(&self, path: &Path) {
+    let mut inner = self.inner.borrow_mut();
+    inner.save_png(path);
+  }
 }
 
 impl<A> EnvInputRepr<[f32]> for ArcadeEnv<A, RamArcadeFeatures> where A: GenericArcadeAction {
@@ -574,17 +674,37 @@ impl<A> SampleExtractInput<[f32]> for ArcadeEnv<A, RamArcadeFeatures> where A: G
 
 impl<A> EnvInputRepr<[f32]> for ArcadeEnv<A, GrayArcadeFeatures> where A: GenericArcadeAction {
   fn _shape3d(&self) -> (usize, usize, usize) {
-    (160, 210, 4)
+    let inner = self.inner.borrow();
+    (inner.features.width, inner.features.height, inner.features.window)
   }
 }
 
 impl<A> SampleExtractInput<[f32]> for ArcadeEnv<A, GrayArcadeFeatures> where A: GenericArcadeAction {
   fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
     let inner = self.inner.borrow();
-    for p in 0 .. 210 * 160 * 4 {
+    let frame_sz = inner.features.width * inner.features.height * inner.features.window;
+    for p in 0 .. frame_sz {
       output[p] = inner.features.obs_buf[p] as f32;
     }
-    Ok(210 * 160 * 4)
+    Ok(frame_sz)
+  }
+}
+
+impl<A> EnvInputRepr<[f32]> for ArcadeEnv<A, RevGrayArcadeFeatures> where A: GenericArcadeAction {
+  fn _shape3d(&self) -> (usize, usize, usize) {
+    let inner = self.inner.borrow();
+    (inner.features.width, inner.features.height, inner.features.window)
+  }
+}
+
+impl<A> SampleExtractInput<[f32]> for ArcadeEnv<A, RevGrayArcadeFeatures> where A: GenericArcadeAction {
+  fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
+    let inner = self.inner.borrow();
+    let frame_sz = inner.features.width * inner.features.height * inner.features.window;
+    for p in 0 .. frame_sz {
+      output[p] = inner.features.obs_buf[p] as f32;
+    }
+    Ok(frame_sz)
   }
 }
 
