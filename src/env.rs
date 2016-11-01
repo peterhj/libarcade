@@ -1,15 +1,20 @@
 use super::{CachedArcadeContext, ArcadeContext, ArcadeSavedState};
 
 use genrl::env::{Env, Action, DiscreteAction, EnvInputRepr, EnvRepr, Discounted, NormalizeDiscounted};
+use genrl::features::{EnvObsRepr};
 use operator::prelude::*;
+use rng::xorshift::*;
 use stb_image::image::{Image};
 
 use rand::{Rng};
 use std::cell::{RefCell};
+use std::cmp::{max};
 use std::collections::{VecDeque};
 use std::fs::{File};
 use std::io::{Write};
 use std::marker::{PhantomData};
+use std::mem::{transmute};
+use std::ops::{Deref};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc};
 use std::sync::{Mutex};
@@ -23,19 +28,21 @@ const NUM_ACTIONS:  usize = 18;
 
 #[derive(Clone, Debug)]
 pub struct ArcadeConfig {
-  pub history_len:  usize,
-  pub skip_frames:  usize,
-  pub noop_max:     usize,
-  pub rom_path:     PathBuf,
+  pub skip_frames:      usize,
+  pub history_len:      usize,
+  pub crop_screen:      Option<(usize, usize, isize, isize)>,
+  pub resize_screen:    Option<(usize, usize)>,
+  pub rom_path:         PathBuf,
 }
 
 impl Default for ArcadeConfig {
   fn default() -> ArcadeConfig {
     ArcadeConfig{
-      history_len:  4,
-      skip_frames:  4,
-      noop_max:     30,
-      rom_path:     PathBuf::from(""),
+      history_len:      4,
+      skip_frames:      4,
+      crop_screen:      None,
+      resize_screen:    None,
+      rom_path:         PathBuf::from(""),
     }
   }
 }
@@ -317,7 +324,7 @@ impl ArcadeFeatures for RevGrayArcadeFeatures {
   fn update(&mut self, context: &mut ArcadeContext) {
     let frame_sz = context.screen_size();
     assert_eq!(self.width * self.height, frame_sz);
-    for frame in (0 .. self.window-1) {
+    for frame in 0 .. self.window-1 {
       let (pre_buf, post_buf) = self.obs_buf.split_at_mut((frame+1) * frame_sz);
       //post_buf[ .. frame_sz].copy_from_slice(&pre_buf[frame * frame_sz .. ]);
       pre_buf[frame * frame_sz .. (frame+1) * frame_sz].copy_from_slice(&post_buf[ .. frame_sz]);
@@ -384,7 +391,7 @@ impl ArcadeFeatures for RgbArcadeFeatures {
   }
 }
 
-pub struct MinifiedArcadeEnvInner<A> {
+/*pub struct MinifiedArcadeEnvInner<A> {
   cfg:      ArcadeConfig,
   history:  VecDeque<(ArcadeSavedState, A)>,
   state:    Option<ArcadeSavedState>,
@@ -393,18 +400,21 @@ pub struct MinifiedArcadeEnvInner<A> {
 
 pub struct MinifiedArcadeEnv<A> {
   inner:    RefCell<MinifiedArcadeEnvInner<A>>,
-}
+}*/
 
 pub struct ArcadeEnvInner<A, F> {
   cfg:      ArcadeConfig,
-  history:  VecDeque<(ArcadeSavedState, A)>,
-  state:    Option<ArcadeSavedState>,
+  ctx:      ArcadeContext,
+  rom_path: Option<PathBuf>,
+  //history:  VecDeque<(ArcadeSavedState, A)>,
+  //state:    Option<ArcadeSavedState>,
   features: F,
+  lifelost: bool,
   _marker:  PhantomData<A>,
 }
 
 impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
-  pub fn deminify(mini_env: &MinifiedArcadeEnv<A>) -> ArcadeEnv<A, F> {
+  /*pub fn deminify(mini_env: &MinifiedArcadeEnv<A>) -> ArcadeEnv<A, F> {
     CONTEXT.with(|ctx| {
       let mut ctx = ctx.borrow_mut();
       let mut mini_env = mini_env.inner.borrow_mut();
@@ -459,82 +469,88 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
         }),
       }
     })
-  }
+  }*/
 
   pub fn reset<R>(&mut self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
+  //pub fn reset(&mut self, init: &ArcadeConfig, rng: &mut Xorshiftplus128Rng) {
     //println!("DEBUG: restarting...");
-    let noop_frames = {
-      let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = self;
-      *cfg = init.clone();
-      CONTEXT.with(|ctx| {
-        let mut ctx = ctx.borrow_mut();
-        ROM_PATH.with(|rom_path| {
-          let mut rom_path = rom_path.borrow_mut();
-          if rom_path.is_none() || &cfg.rom_path != rom_path.as_ref().unwrap() {
-            assert!(ctx.open_rom(&cfg.rom_path).is_ok());
-            *rom_path = Some(cfg.rom_path.clone());
-          }
-        });
-        ctx.reset();
-        let saved_state = ctx.save_system_state();
-        *state = Some(saved_state);
-        history.clear();
-        features.reset();
-        features.update(&mut ctx);
-      });
+    //let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = self;
+    self.cfg = init.clone();
+    if self.rom_path.is_none() || &self.cfg.rom_path != self.rom_path.as_ref().unwrap() {
+      assert!(self.ctx.open_rom(&self.cfg.rom_path).is_ok());
+      self.rom_path = Some(self.cfg.rom_path.clone());
+    }
+    if !self.lifelost || self.ctx.is_game_over() {
+      self.ctx.reset();
+    }
+      //let saved_state = self.ctx.save_system_state();
+      //self.state = Some(saved_state);
+      //self.history.clear();
+    self.features.reset();
+    self.features.update(&mut self.ctx);
+    self.lifelost = false;
+    //});
+    /*let noop_frames = {
       // XXX(20161028): We want all frames in the input to have something
       // rather than have any zero padding. Also, add one to the history length
       // in case of color averaging.
-      if cfg.noop_max > cfg.history_len + 1 {
+      /*if cfg.noop_max > cfg.history_len + 1 {
         rng.gen_range(cfg.history_len + 1, cfg.noop_max + 1)
       } else {
         cfg.history_len + 1
-      }
+      }*/
+      let mut xrng: &mut Xorshiftplus128Rng = unsafe { transmute(rng) };
+      xrng._randint(cfg.history_len + 1, max(cfg.history_len + 1, cfg.noop_max))
+      //rng.gen_range(cfg.history_len + 1, max(cfg.history_len + 1, cfg.noop_max) + 1)
     };
     for _ in 0 .. noop_frames {
       let _ = self.step(&A::noop()).unwrap();
-    }
+    }*/
   }
 
   pub fn is_terminal(&mut self) -> bool {
-    CONTEXT.with(|ctx| {
-      let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = self;
-      let mut ctx = ctx.borrow_mut();
-      if let &mut Some(ref mut state) = state {
+    //CONTEXT.with(|ctx| {
+      //let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut features, ..} = self;
+      //let mut ctx = ctx.borrow_mut();
+      /*if let &mut Some(ref mut state) = state {
         ctx.load_system_state(state);
       } else {
         unreachable!();
-      }
-      let is_term = ctx.is_game_over();
-      is_term
-    })
+      }*/
+      self.ctx.is_game_over() || self.lifelost
+    //})
   }
 
   pub fn step(&mut self, action: &A) -> Result<Option<f32>, ()> {
-    CONTEXT.with(|ctx| {
-      let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut history, ref mut features, ..} = self;
-      let mut ctx = ctx.borrow_mut();
-      if let &mut Some(ref mut state) = state {
+    //CONTEXT.with(|ctx| {
+      //let &mut ArcadeEnvInner{ref cfg, ref mut state, ref mut history, ref mut features, ..} = self;
+      //let mut ctx = ctx.borrow_mut();
+      /*if let &mut Some(ref mut state) = state {
         ctx.load_system_state(state);
       } else {
         unreachable!();
-      }
-      assert!(history.len() <= self.cfg.history_len);
+      }*/
+      /*assert!(history.len() <= self.cfg.history_len);
       if history.len() == self.cfg.history_len {
         let _ = history.pop_front();
       }
-      history.push_back((ctx.save_system_state(), *action));
+      history.push_back((ctx.save_system_state(), *action));*/
       // FIXME(20161027): Move frame skipping into the "ale.cfg" file.
       /*let mut res = 0;
       for _ in 0 .. cfg.skip_frames {
         let r = ctx.act(action.id());
         res += r;
       }*/
-      let res = ctx.act(action.id());
-      *state = Some(ctx.save_system_state());
-      features.update(&mut ctx);
+      let prev_lives = self.ctx.num_lives();
+      let res = self.ctx.act(action.id());
+      let next_lives = self.ctx.num_lives();
+      if next_lives < prev_lives {
+        self.lifelost = true;
+      }
+      //self.state = Some(self.ctx.save_system_state());
+      self.features.update(&mut self.ctx);
       Ok(Some(res as f32))
-    })
+    //})
   }
 
   pub fn save_png(&mut self, path: &Path) {
@@ -566,63 +582,70 @@ impl<A, F> Default for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFe
     ArcadeEnv{
       inner:    RefCell::new(ArcadeEnvInner{
         cfg:        Default::default(),
-        state:      None,
-        history:    VecDeque::with_capacity(4),
+        ctx:        ArcadeContext::new(),
+        rom_path:   None,
+        //history:    VecDeque::with_capacity(4),
+        //state:      None,
         features:   Default::default(),
+        lifelost:   false,
         _marker:    PhantomData,
       }),
     }
   }
 }
 
-impl<A, F> Clone for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+/*impl<A, F> Clone for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
   fn clone(&self) -> ArcadeEnv<A, F> {
     let mut inner = self.inner.borrow_mut();
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      let mut new_history = VecDeque::with_capacity(4);
+    //CONTEXT.with(|ctx| {
+      //let mut ctx = ctx.borrow_mut();
+      /*let mut new_history = VecDeque::with_capacity(4);
       for h in inner.history.iter_mut() {
         ctx.load_system_state(&mut h.0);
         new_history.push_back((ctx.save_system_state(), h.1));
-      }
-      let new_state = if let Some(ref mut state) = inner.state {
+      }*/
+      /*let new_state = if let Some(ref mut state) = inner.state {
         ctx.load_system_state(state);
         Some(ctx.save_system_state())
       } else {
         None
-      };
+      };*/
       ArcadeEnv{
         inner:  RefCell::new(ArcadeEnvInner{
           cfg:      inner.cfg.clone(),
-          history:  new_history,
-          state:    new_state,
+          ctx:      ArcadeContext::new(),
+          rom_path: inner.rom_path.clone(),
+          //history:  new_history,
+          //state:    new_state,
           features: inner.features.clone(),
           _marker:  PhantomData,
         }),
       }
-    })
+    //})
   }
-}
+}*/
 
 impl<A, F> ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
   pub fn _state_size(&self) -> usize {
     let mut inner = self.inner.borrow_mut();
-    inner.state.as_mut().unwrap().encoded_size()
+    //inner.state.as_mut().unwrap().encoded_size()
+    unimplemented!();
   }
 
   pub fn num_minimal_actions(&self) -> usize {
     let mut inner = self.inner.borrow_mut();
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      ctx.num_minimal_actions()
-    })
+    //CONTEXT.with(|ctx| {
+      //let mut ctx = ctx.borrow_mut();
+      inner.ctx.num_minimal_actions()
+    //})
   }
 
   pub fn extract_minimal_action_set(&self, actions: &mut [i32]) -> usize {
-    CONTEXT.with(|ctx| {
-      let mut ctx = ctx.borrow_mut();
-      ctx.extract_minimal_action_set(actions)
-    })
+    let mut inner = self.inner.borrow_mut();
+    //CONTEXT.with(|ctx| {
+      //let mut ctx = ctx.borrow_mut();
+      inner.ctx.extract_minimal_action_set(actions)
+    //})
   }
 }
 
@@ -632,6 +655,7 @@ impl<A, F> Env for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatur
   type Response = f32;
 
   fn reset<R>(&self, init: &ArcadeConfig, rng: &mut R) where R: Rng {
+  //fn reset(&self, init: &ArcadeConfig, rng: &mut Xorshiftplus128Rng) {
     let mut inner = self.inner.borrow_mut();
     inner.reset(init, rng);
   }
@@ -653,6 +677,83 @@ impl<A, F> Env for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatur
   fn _save_png(&self, path: &Path) {
     let mut inner = self.inner.borrow_mut();
     inner.save_png(path);
+  }
+}
+
+#[derive(Clone)]
+pub struct ArcadeGrayObs {
+  pub dim:  (usize, usize, usize),
+  pub buf:  Vec<u8>,
+}
+
+impl Deref for ArcadeGrayObs {
+  type Target = [u8];
+
+  fn deref(&self) -> &[u8] {
+    &self.buf
+  }
+}
+
+impl<A, F> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+  fn _obs_shape3d() -> (usize, usize, usize) {
+    (160, 160, 1)
+    //(160, 210, 1)
+  }
+
+  fn observe(&self) -> ArcadeGrayObs {
+    let mut inner = self.inner.borrow_mut();
+    //CONTEXT.with(|ctx| {
+      //let mut ctx = ctx.borrow_mut();
+      let mut buf = Vec::with_capacity(160 * 210);
+      buf.resize(160 * 210, 0);
+      inner.ctx.extract_screen_grayscale(&mut buf);
+      if inner.cfg.crop_screen.is_none() && inner.cfg.resize_screen.is_none() {
+        ArcadeGrayObs{
+          dim:    (160, 210, 1),
+          buf:    buf,
+        }
+      } else if inner.cfg.crop_screen.is_some() && inner.cfg.resize_screen.is_none() {
+        let (crop_w, crop_h, offset_x, offset_y) = inner.cfg.crop_screen.unwrap();
+        let mut cropped_buf = Vec::with_capacity(crop_w * crop_h);
+        for v in 0 .. crop_h {
+          for u in 0 .. crop_w {
+            let x = (u as isize + offset_x) as usize;
+            let y = (v as isize + offset_y) as usize;
+            if x < 160 && y < 210 {
+              cropped_buf.push(buf[x + 160 * y]);
+            } else {
+              cropped_buf.push(0);
+            }
+          }
+        }
+        assert_eq!(crop_w * crop_h, cropped_buf.len());
+        ArcadeGrayObs{
+          dim:    (crop_w, crop_h, 1),
+          buf:    cropped_buf,
+        }
+      } else if inner.cfg.crop_screen.is_none() && inner.cfg.resize_screen.is_some() {
+        unimplemented!();
+      } else if inner.cfg.crop_screen.is_some() && inner.cfg.resize_screen.is_some() {
+        unimplemented!();
+      } else {
+        unreachable!();
+      }
+    //})
+  }
+}
+
+impl SampleExtractInput<[f32]> for ArcadeGrayObs {
+  fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
+    assert!(160 * 160 <= output.len());
+    for p in 0 .. 160 * 160 {
+      output[p] = self.buf[p] as f32;
+    }
+    Ok(160 * 160)
+    /*assert!(160 * 210 <= output.len());
+    for p in 0 .. 160 * 210 {
+      output[p] = self.buf[p] as f32;
+    }
+    Ok(160 * 210)*/
   }
 }
 

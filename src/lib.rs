@@ -2,6 +2,7 @@
 
 extern crate genrl;
 extern crate operator;
+extern crate rng;
 extern crate stb_image;
 
 extern crate libc;

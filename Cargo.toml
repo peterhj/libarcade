@@ -13,4 +13,5 @@ libc = "^0.2.*"
 rand = "*"
 genrl = { path = "../libgenrl" }
 operator = { path = "../liboperator" }
+rng = { path = "../librng" }
 stb_image = { path = "../rust-stb-image" }
