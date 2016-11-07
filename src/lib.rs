@@ -1,6 +1,8 @@
 #![feature(convert)]
 
+extern crate densearray;
 extern crate genrl;
+extern crate image_interpolate;
 extern crate operator;
 extern crate rng;
 extern crate stb_image;

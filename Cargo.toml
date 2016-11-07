@@ -8,10 +8,15 @@ build = "build.rs"
 name = "arcade"
 path = "src/lib.rs"
 
+[build-dependencies]
+walkdir = "^1"
+
 [dependencies]
-libc = "^0.2.*"
+libc = "^0.2"
 rand = "*"
+densearray = { path = "../libdensearray" }
 genrl = { path = "../libgenrl" }
+image_interpolate = { path = "../libimage_interpolate" }
 operator = { path = "../liboperator" }
 rng = { path = "../librng" }
 stb_image = { path = "../rust-stb-image" }

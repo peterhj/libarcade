@@ -1,7 +1,9 @@
 use super::{CachedArcadeContext, ArcadeContext, ArcadeSavedState};
 
+use densearray::prelude::*;
 use genrl::env::{Env, Action, DiscreteAction, EnvInputRepr, EnvRepr, Discounted, NormalizeDiscounted};
 use genrl::features::{EnvObsRepr};
+use image_interpolate::linear::*;
 use operator::prelude::*;
 use rng::xorshift::*;
 use stb_image::image::{Image};
@@ -32,6 +34,7 @@ pub struct ArcadeConfig {
   pub history_len:      usize,
   pub crop_screen:      Option<(usize, usize, isize, isize)>,
   pub resize_screen:    Option<(usize, usize)>,
+  pub soft_reset:       bool,
   pub rom_path:         PathBuf,
 }
 
@@ -42,6 +45,7 @@ impl Default for ArcadeConfig {
       skip_frames:      4,
       crop_screen:      None,
       resize_screen:    None,
+      soft_reset:       true,
       rom_path:         PathBuf::from(""),
     }
   }
@@ -696,64 +700,78 @@ impl Deref for ArcadeGrayObs {
 
 impl<A, F> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
   fn _obs_shape3d() -> (usize, usize, usize) {
+    // FIXME(20161102): this should not be here!
+    //(84, 84, 1)
     (160, 160, 1)
     //(160, 210, 1)
   }
 
-  fn observe(&self) -> ArcadeGrayObs {
+  fn observe(&self, rng: &mut Xorshiftplus128Rng) -> ArcadeGrayObs {
     let mut inner = self.inner.borrow_mut();
-    //CONTEXT.with(|ctx| {
-      //let mut ctx = ctx.borrow_mut();
-      let mut buf = Vec::with_capacity(160 * 210);
-      buf.resize(160 * 210, 0);
-      inner.ctx.extract_screen_grayscale(&mut buf);
-      if inner.cfg.crop_screen.is_none() && inner.cfg.resize_screen.is_none() {
-        ArcadeGrayObs{
-          dim:    (160, 210, 1),
-          buf:    buf,
-        }
-      } else if inner.cfg.crop_screen.is_some() && inner.cfg.resize_screen.is_none() {
-        let (crop_w, crop_h, offset_x, offset_y) = inner.cfg.crop_screen.unwrap();
-        let mut cropped_buf = Vec::with_capacity(crop_w * crop_h);
-        for v in 0 .. crop_h {
-          for u in 0 .. crop_w {
-            let x = (u as isize + offset_x) as usize;
-            let y = (v as isize + offset_y) as usize;
-            if x < 160 && y < 210 {
-              cropped_buf.push(buf[x + 160 * y]);
-            } else {
-              cropped_buf.push(0);
-            }
+    let mut dim = (160, 210);
+    let mut buf = Vec::with_capacity(160 * 210);
+    buf.resize(160 * 210, 0);
+    inner.ctx.extract_screen_grayscale(&mut buf);
+    if let Some(crop_screen) = inner.cfg.crop_screen {
+      let (prev_w, prev_h) = dim;
+      let (crop_w, crop_h, offset_x, offset_y) = crop_screen;
+      let mut cropped_buf = Vec::with_capacity(crop_w * crop_h);
+      for v in 0 .. crop_h {
+        for u in 0 .. crop_w {
+          let x = (u as isize + offset_x) as usize;
+          let y = (v as isize + offset_y) as usize;
+          if x < prev_w && y < prev_h {
+            cropped_buf.push(buf[x + prev_w * y]);
+          } else {
+            cropped_buf.push(0);
           }
         }
-        assert_eq!(crop_w * crop_h, cropped_buf.len());
-        ArcadeGrayObs{
-          dim:    (crop_w, crop_h, 1),
-          buf:    cropped_buf,
-        }
-      } else if inner.cfg.crop_screen.is_none() && inner.cfg.resize_screen.is_some() {
-        unimplemented!();
-      } else if inner.cfg.crop_screen.is_some() && inner.cfg.resize_screen.is_some() {
-        unimplemented!();
-      } else {
-        unreachable!();
       }
-    //})
+      assert_eq!(crop_w * crop_h, cropped_buf.len());
+      dim = (crop_w, crop_h);
+      buf = cropped_buf;
+    }
+    if let Some(resize_screen) = inner.cfg.resize_screen {
+      let (prev_w, prev_h) = dim;
+      let (resize_w, resize_h) = resize_screen;
+      let mut resized_buf = Vec::with_capacity(resize_w * resize_h);
+      interpolate2d_linear_u8sr(
+          (1, prev_w, prev_h),
+          &buf,
+          (1, resize_w, resize_h),
+          &mut resized_buf,
+          rng);
+      dim = (resize_w, resize_h);
+      buf = resized_buf;
+    }
+    ArcadeGrayObs{
+      dim:    (dim.0, dim.1, 1),
+      buf:    buf,
+    }
+  }
+}
+
+impl SampleExtractInput<[u8]> for ArcadeGrayObs {
+  fn extract_input(&self, output: &mut [u8]) -> Result<usize, ()> {
+    assert!(self.dim.flat_len() <= output.len());
+    output[ .. self.dim.flat_len()].copy_from_slice(&self.buf);
+    Ok(self.dim.flat_len())
   }
 }
 
 impl SampleExtractInput<[f32]> for ArcadeGrayObs {
   fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
-    assert!(160 * 160 <= output.len());
-    for p in 0 .. 160 * 160 {
+    assert!(self.dim.flat_len() <= output.len());
+    for p in 0 .. self.dim.flat_len() {
       output[p] = self.buf[p] as f32;
     }
-    Ok(160 * 160)
-    /*assert!(160 * 210 <= output.len());
-    for p in 0 .. 160 * 210 {
-      output[p] = self.buf[p] as f32;
-    }
-    Ok(160 * 210)*/
+    Ok(self.dim.flat_len())
+  }
+}
+
+impl SampleInputShape<(usize, usize, usize)> for ArcadeGrayObs {
+  fn input_shape(&self) -> Option<(usize, usize, usize)> {
+    Some(self.dim)
   }
 }
 

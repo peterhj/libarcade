@@ -1,8 +1,18 @@
-use std::process::{Command};
+extern crate walkdir;
+
+use walkdir::{WalkDir};
+
 use std::env;
 use std::path::{PathBuf};
+use std::process::{Command};
 
 fn main() {
+  println!("cargo:rerun-if-changed=build.rs");
+  for entry in WalkDir::new("Arcade-Learning-Environment") {
+    let entry = entry.unwrap();
+    println!("cargo:rerun-if-changed={}", entry.path().display());
+  }
+
   let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
   let out_dir = env::var("OUT_DIR").unwrap();
 
@@ -11,7 +21,8 @@ fn main() {
 
   let mut ale_lib_dst_path = PathBuf::from(&out_dir);
   ale_lib_dst_path.push("libale_cffi_static.a");
-  if !ale_lib_dst_path.exists() {
+
+  {
     let mut ale_src_path = PathBuf::from(&manifest_dir);
     ale_src_path.push("Arcade-Learning-Environment");
     assert!(Command::new("cmake")
