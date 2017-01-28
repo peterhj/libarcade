@@ -36,6 +36,9 @@ pub struct ArcadeConfig {
   pub resize_screen:    Option<(usize, usize)>,
   pub soft_reset:       bool,
   pub rom_path:         PathBuf,
+  pub rng_seed:         Option<i32>,
+  pub average_colors:   bool,
+  pub repeat_prob:      f32,
 }
 
 impl Default for ArcadeConfig {
@@ -47,6 +50,9 @@ impl Default for ArcadeConfig {
       resize_screen:    None,
       soft_reset:       true,
       rom_path:         PathBuf::from(""),
+      rng_seed:         None,
+      average_colors:   false,
+      repeat_prob:      0.0,
     }
   }
 }
@@ -406,18 +412,18 @@ pub struct MinifiedArcadeEnv<A> {
   inner:    RefCell<MinifiedArcadeEnvInner<A>>,
 }*/
 
-pub struct ArcadeEnvInner<A, F> {
+pub struct ArcadeEnvInner<A> {
   cfg:      ArcadeConfig,
   ctx:      ArcadeContext,
   rom_path: Option<PathBuf>,
   //history:  VecDeque<(ArcadeSavedState, A)>,
   //state:    Option<ArcadeSavedState>,
-  features: F,
+  //features: F,
   lifelost: bool,
   _marker:  PhantomData<A>,
 }
 
-impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
   /*pub fn deminify(mini_env: &MinifiedArcadeEnv<A>) -> ArcadeEnv<A, F> {
     CONTEXT.with(|ctx| {
       let mut ctx = ctx.borrow_mut();
@@ -480,6 +486,13 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
     //println!("DEBUG: restarting...");
     //let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = self;
     self.cfg = init.clone();
+    if let Some(rng_seed) = self.cfg.rng_seed {
+      self.ctx.set_int("random_seed", rng_seed);
+    }
+    //self.ctx.set_int("frame_skip", self.cfg.skip_frames as i32);
+    self.ctx.set_bool("color_averaging", self.cfg.average_colors);
+    self.ctx.set_float("repeat_action_probability", self.cfg.repeat_prob);
+    //println!("DEBUG: ctx: frame_skip: {:?}", self.ctx.get_int("frame_skip"));
     if self.rom_path.is_none() || &self.cfg.rom_path != self.rom_path.as_ref().unwrap() {
       assert!(self.ctx.open_rom(&self.cfg.rom_path).is_ok());
       self.rom_path = Some(self.cfg.rom_path.clone());
@@ -487,12 +500,13 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
     if !self.lifelost || self.ctx.is_game_over() {
       self.ctx.reset();
     }
+    self.lifelost = false;
+
       //let saved_state = self.ctx.save_system_state();
       //self.state = Some(saved_state);
       //self.history.clear();
-    self.features.reset();
-    self.features.update(&mut self.ctx);
-    self.lifelost = false;
+    /*self.features.reset();
+    self.features.update(&mut self.ctx);*/
     //});
     /*let noop_frames = {
       // XXX(20161028): We want all frames in the input to have something
@@ -546,13 +560,17 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
         res += r;
       }*/
       let prev_lives = self.ctx.num_lives();
-      let res = self.ctx.act(action.id());
+      let mut res = 0;
+      //let res = self.ctx.act(action.id());
+      for _ in 0 .. self.cfg.skip_frames {
+        res += self.ctx.act(action.id());
+      }
       let next_lives = self.ctx.num_lives();
       if next_lives < prev_lives {
         self.lifelost = true;
       }
       //self.state = Some(self.ctx.save_system_state());
-      self.features.update(&mut self.ctx);
+      //self.features.update(&mut self.ctx);
       Ok(Some(res as f32))
     //})
   }
@@ -560,13 +578,15 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
   pub fn save_png(&mut self, path: &Path) {
     let frame_sz = 160 * 210;
     let mut pixels = Vec::with_capacity(3 * frame_sz);
-    for &x in &self.features.obs()[ .. frame_sz] {
+    // FIXME(20161107)
+    unimplemented!();
+    /*for &x in &self.features.obs()[ .. frame_sz] {
       let y = x as i32;
       assert!(y >= 0 && y <= 255);
       pixels.push(y as u8);
       pixels.push(y as u8);
       pixels.push(y as u8);
-    }
+    }*/
     let im = Image::new(160, 210, 3, pixels);
     let png_buf = match im.write_png() {
       Err(_) => panic!("failed to generate png"),
@@ -577,12 +597,12 @@ impl<A, F> ArcadeEnvInner<A, F> where A: GenericArcadeAction, F: ArcadeFeatures 
   }
 }
 
-pub struct ArcadeEnv<A, F> {
-  inner:    RefCell<ArcadeEnvInner<A, F>>,
+pub struct ArcadeEnv<A> {
+  inner:    RefCell<ArcadeEnvInner<A>>,
 }
 
-impl<A, F> Default for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
-  fn default() -> ArcadeEnv<A, F> {
+impl<A> Default for ArcadeEnv<A> where A: GenericArcadeAction {
+  fn default() -> ArcadeEnv<A> {
     ArcadeEnv{
       inner:    RefCell::new(ArcadeEnvInner{
         cfg:        Default::default(),
@@ -590,7 +610,7 @@ impl<A, F> Default for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFe
         rom_path:   None,
         //history:    VecDeque::with_capacity(4),
         //state:      None,
-        features:   Default::default(),
+        //features:   Default::default(),
         lifelost:   false,
         _marker:    PhantomData,
       }),
@@ -629,7 +649,7 @@ impl<A, F> Default for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFe
   }
 }*/
 
-impl<A, F> ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+impl<A> ArcadeEnv<A> where A: GenericArcadeAction {
   pub fn _state_size(&self) -> usize {
     let mut inner = self.inner.borrow_mut();
     //inner.state.as_mut().unwrap().encoded_size()
@@ -653,7 +673,7 @@ impl<A, F> ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
   }
 }
 
-impl<A, F> Env for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+impl<A> Env for ArcadeEnv<A> where A: GenericArcadeAction {
   type Init = ArcadeConfig;
   type Action = A;
   type Response = f32;
@@ -698,7 +718,7 @@ impl Deref for ArcadeGrayObs {
   }
 }
 
-impl<A, F> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A, F> where A: GenericArcadeAction, F: ArcadeFeatures {
+impl<A> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A> where A: GenericArcadeAction {
   fn _obs_shape3d() -> (usize, usize, usize) {
     // FIXME(20161102): this should not be here!
     //(84, 84, 1)
@@ -741,9 +761,11 @@ impl<A, F> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A, F> where A: GenericArcadeA
           (1, resize_w, resize_h),
           &mut resized_buf,
           rng);
+      assert_eq!(resize_w * resize_h, resized_buf.len());
       dim = (resize_w, resize_h);
       buf = resized_buf;
     }
+    assert_eq!(dim.flat_len(), buf.len());
     ArcadeGrayObs{
       dim:    (dim.0, dim.1, 1),
       buf:    buf,
@@ -753,7 +775,14 @@ impl<A, F> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A, F> where A: GenericArcadeA
 
 impl SampleExtractInput<[u8]> for ArcadeGrayObs {
   fn extract_input(&self, output: &mut [u8]) -> Result<usize, ()> {
-    assert!(self.dim.flat_len() <= output.len());
+    if self.dim.flat_len() != self.buf.len() {
+      println!("WARNING: ArcadeGrayObs: dimension mismatch: {:?} {} {}", self.dim, self.dim.flat_len(), self.buf.len());
+      assert_eq!(self.dim.flat_len(), self.buf.len());
+    }
+    if self.dim.flat_len() > output.len() {
+      println!("WARNING: ArcadeGrayObs: dimension mismatch while extracting input: {:?} {} {}", self.dim, self.dim.flat_len(), output.len());
+      assert!(self.dim.flat_len() <= output.len());
+    }
     output[ .. self.dim.flat_len()].copy_from_slice(&self.buf);
     Ok(self.dim.flat_len())
   }
@@ -761,6 +790,7 @@ impl SampleExtractInput<[u8]> for ArcadeGrayObs {
 
 impl SampleExtractInput<[f32]> for ArcadeGrayObs {
   fn extract_input(&self, output: &mut [f32]) -> Result<usize, ()> {
+    assert_eq!(self.dim.flat_len(), self.buf.len());
     assert!(self.dim.flat_len() <= output.len());
     for p in 0 .. self.dim.flat_len() {
       output[p] = self.buf[p] as f32;
@@ -775,7 +805,7 @@ impl SampleInputShape<(usize, usize, usize)> for ArcadeGrayObs {
   }
 }
 
-impl<A> EnvInputRepr<[f32]> for ArcadeEnv<A, RamArcadeFeatures> where A: GenericArcadeAction {
+/*impl<A> EnvInputRepr<[f32]> for ArcadeEnv<A, RamArcadeFeatures> where A: GenericArcadeAction {
   fn _shape3d(&self) -> (usize, usize, usize) {
     (1, 1, 128 * 4)
   }
@@ -842,4 +872,4 @@ impl<A> SampleExtractInput<[f32]> for ArcadeEnv<A, RgbArcadeFeatures> where A: G
     }
     Ok(210 * 160 * 12)
   }
-}
+}*/

@@ -56,4 +56,5 @@ extern "C" {
   pub fn ALEState_encodeState(state: *mut ALEState, buf: *mut c_char, buf_len: c_int);
   pub fn ALEState_encodeStateLen(state: *mut ALEState) -> c_int;
   pub fn ALEState_decodeState(serialized: *const c_char, len: c_int) -> *mut ALEState;
+  pub fn ALE_setLoggerMode(mode: c_int);
 }

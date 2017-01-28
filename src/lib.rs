@@ -15,6 +15,7 @@ use ffi::*;
 use libc::{c_int};
 use std::ffi::{CString};
 use std::path::{Path, PathBuf};
+use std::ptr::{null_mut};
 
 pub mod env;
 pub mod ffi;
@@ -31,19 +32,23 @@ pub struct ArcadeContext {
 
 impl Drop for ArcadeContext {
   fn drop(&mut self) {
+    assert!(!self.ptr.is_null());
     unsafe { ALEInterface_delete(self.ptr) };
+    self.ptr = null_mut();
   }
 }
 
 impl ArcadeContext {
   pub fn new() -> ArcadeContext {
+    // Suppress info and warning logs, otherwise lots of logspam.
+    unsafe { ALE_setLoggerMode(2) };
     let mut ctx = ArcadeContext{
       ptr:  unsafe { ALEInterface_new() },
       //cached_rom_path:  None,
     };
-    println!("DEBUG: ctx: frame_skip: {:?}", ctx.get_int("frame_skip"));
+    /*println!("DEBUG: ctx: frame_skip: {:?}", ctx.get_int("frame_skip"));
     println!("DEBUG: ctx: repeat_action_probability: {:?}", ctx.get_float("repeat_action_probability"));
-    println!("DEBUG: ctx: color_averaging: {:?}", ctx.get_bool("color_averaging"));
+    println!("DEBUG: ctx: color_averaging: {:?}", ctx.get_bool("color_averaging"));*/
     ctx
   }
 

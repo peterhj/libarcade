@@ -36,6 +36,7 @@ fn main() {
       .status().unwrap().success());
     assert!(Command::new("make")
       .current_dir(&out_dir)
+      .arg("-j8")
       .status().unwrap().success());
   }
 
