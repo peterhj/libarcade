@@ -4,6 +4,7 @@ use densearray::prelude::*;
 use genrl::env::{Env, Action, DiscreteAction, EnvInputRepr, EnvRepr, Discounted, NormalizeDiscounted};
 use genrl::features::{EnvObsRepr};
 use image_interpolate::linear::*;
+use ipp::*;
 use operator::prelude::*;
 use rng::xorshift::*;
 use stb_image::image::{Image};
@@ -11,7 +12,7 @@ use stb_image::image::{Image};
 use rand::{Rng};
 use std::cell::{RefCell};
 use std::cmp::{max};
-use std::collections::{VecDeque};
+use std::collections::{HashMap, /*VecDeque*/};
 use std::fs::{File};
 use std::io::{Write};
 use std::marker::{PhantomData};
@@ -704,6 +705,10 @@ impl<A> Env for ArcadeEnv<A> where A: GenericArcadeAction {
   }
 }
 
+thread_local! {
+  pub static PYRAMIDS: RefCell<HashMap<(usize, usize, usize, usize), IppImageDownsamplePyramid<u8>>> = RefCell::new(HashMap::new());
+}
+
 #[derive(Clone)]
 pub struct ArcadeGrayObs {
   pub dim:  (usize, usize, usize),
@@ -721,9 +726,10 @@ impl Deref for ArcadeGrayObs {
 impl<A> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A> where A: GenericArcadeAction {
   fn _obs_shape3d() -> (usize, usize, usize) {
     // FIXME(20161102): this should not be here!
-    //(84, 84, 1)
+    /*//(84, 84, 1)
     (160, 160, 1)
-    //(160, 210, 1)
+    //(160, 210, 1)*/
+    unimplemented!();
   }
 
   fn observe(&self, rng: &mut Xorshiftplus128Rng) -> ArcadeGrayObs {
@@ -755,13 +761,23 @@ impl<A> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A> where A: GenericArcadeAction 
       let (prev_w, prev_h) = dim;
       let (resize_w, resize_h) = resize_screen;
       let mut resized_buf = Vec::with_capacity(resize_w * resize_h);
-      interpolate2d_linear_u8sr(
+      resized_buf.resize(resize_w * resize_h, 0);
+      assert_eq!(resize_w * resize_h, resized_buf.len());
+      /*interpolate2d_linear_u8sr(
           (1, prev_w, prev_h),
           &buf,
           (1, resize_w, resize_h),
           &mut resized_buf,
-          rng);
-      assert_eq!(resize_w * resize_h, resized_buf.len());
+          rng);*/
+      PYRAMIDS.with(|pyramids| {
+        let mut pyramids = pyramids.borrow_mut();
+        let key = (prev_w, prev_h, resize_w, resize_h);
+        if !pyramids.contains_key(&key) {
+          pyramids.insert(key, IppImageDownsamplePyramid::<u8>::new(prev_w, prev_h, resize_w, resize_h));
+        }
+        let pyramid = pyramids.get_mut(&key).unwrap();
+        pyramid.downsample(&buf, &mut resized_buf);
+      });
       dim = (resize_w, resize_h);
       buf = resized_buf;
     }

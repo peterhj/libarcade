@@ -17,6 +17,7 @@ rand = "*"
 densearray = { path = "../libdensearray" }
 genrl = { path = "../libgenrl" }
 image_interpolate = { path = "../libimage_interpolate" }
+ipp = { path = "../libipp" }
 operator = { path = "../liboperator" }
 rng = "^0.1"
 stb_image = { path = "../rust-stb-image" }
