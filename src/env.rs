@@ -10,6 +10,7 @@ use rng::xorshift::*;
 use stb_image::image::{Image};
 
 use rand::{Rng};
+use std::i32;
 use std::cell::{RefCell};
 use std::cmp::{max};
 use std::collections::{HashMap, /*VecDeque*/};
@@ -37,7 +38,7 @@ pub struct ArcadeConfig {
   pub resize_screen:    Option<(usize, usize)>,
   pub soft_reset:       bool,
   pub rom_path:         PathBuf,
-  pub rng_seed:         Option<i32>,
+  pub fixed_seed:       Option<i32>,
   pub average_colors:   bool,
   pub repeat_prob:      f32,
 }
@@ -51,7 +52,7 @@ impl Default for ArcadeConfig {
       resize_screen:    None,
       soft_reset:       true,
       rom_path:         PathBuf::from(""),
-      rng_seed:         None,
+      fixed_seed:       None,
       average_colors:   false,
       repeat_prob:      0.0,
     }
@@ -78,6 +79,10 @@ impl Action for ArcadeAction {
 }
 
 impl DiscreteAction for ArcadeAction {
+  fn discrete_dim() -> usize {
+    NUM_ACTIONS
+  }
+
   fn from_idx(idx: u32) -> ArcadeAction {
     assert!(idx < Self::dim() as u32);
     ArcadeAction{id: idx as i32}
@@ -113,11 +118,15 @@ impl FourArcadeAction {
 
 impl Action for FourArcadeAction {
   fn dim() -> usize {
-    6
+    4
   }
 }
 
 impl DiscreteAction for FourArcadeAction {
+  fn discrete_dim() -> usize {
+    4
+  }
+
   fn from_idx(idx: u32) -> FourArcadeAction {
     assert!(idx < Self::dim() as u32);
     FourArcadeAction{idx: idx}
@@ -160,6 +169,10 @@ impl Action for SixArcadeAction {
 }
 
 impl DiscreteAction for SixArcadeAction {
+  fn discrete_dim() -> usize {
+    6
+  }
+
   fn from_idx(idx: u32) -> SixArcadeAction {
     assert!(idx < Self::dim() as u32);
     SixArcadeAction{idx: idx}
@@ -182,6 +195,48 @@ impl GenericArcadeAction for SixArcadeAction {
 
 pub type PongArcadeAction = SixArcadeAction;
 pub type SpaceInvadersArcadeAction = SixArcadeAction;
+
+#[derive(Clone, Copy)]
+pub struct AllArcadeAction {
+  idx:  u32,
+}
+
+/*impl AllArcadeAction {
+  pub fn noop() -> AllArcadeAction {
+    AllArcadeAction{idx: 0}
+  }
+}*/
+
+impl Action for AllArcadeAction {
+  fn dim() -> usize {
+    18
+  }
+}
+
+impl DiscreteAction for AllArcadeAction {
+  fn discrete_dim() -> usize {
+    18
+  }
+
+  fn from_idx(idx: u32) -> AllArcadeAction {
+    assert!(idx < Self::dim() as u32);
+    AllArcadeAction{idx: idx}
+  }
+
+  fn idx(&self) -> u32 {
+    self.idx
+  }
+}
+
+impl GenericArcadeAction for AllArcadeAction {
+  fn noop() -> AllArcadeAction {
+    AllArcadeAction{idx: 0}
+  }
+
+  fn id(&self) -> i32 {
+    self.idx as i32
+  }
+}
 
 pub trait ArcadeFeatures: Clone + Default {
   fn reset(&mut self);
@@ -487,13 +542,21 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
     //println!("DEBUG: restarting...");
     //let &mut ArcadeEnvInner{ref mut cfg, ref mut state, ref mut history, ref mut features, ..} = self;
     self.cfg = init.clone();
-    if let Some(rng_seed) = self.cfg.rng_seed {
-      self.ctx.set_int("random_seed", rng_seed);
+    // FIXME: the seed should be set by querying the provided rng.
+    if let Some(seed) = self.cfg.fixed_seed {
+      self.ctx.set_int("random_seed", seed);
+    } else {
+      let u = rng.gen_range::<u32>(0, i32::MAX as u32 + 1);
+      let seed = u as i32;
+      assert!(seed >= 0);
+      self.ctx.set_int("random_seed", seed);
     }
     //self.ctx.set_int("frame_skip", self.cfg.skip_frames as i32);
+    self.ctx.set_int("frame_skip", 1);
     self.ctx.set_bool("color_averaging", self.cfg.average_colors);
     self.ctx.set_float("repeat_action_probability", self.cfg.repeat_prob);
     //println!("DEBUG: ctx: frame_skip: {:?}", self.ctx.get_int("frame_skip"));
+    //println!("DEBUG: ctx: random_seed: {:?}", self.ctx.get_int("random_seed"));
     if self.rom_path.is_none() || &self.cfg.rom_path != self.rom_path.as_ref().unwrap() {
       assert!(self.ctx.open_rom(&self.cfg.rom_path).is_ok());
       self.rom_path = Some(self.cfg.rom_path.clone());
@@ -501,6 +564,10 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
     if !self.lifelost || self.ctx.is_game_over() {
       self.ctx.reset();
     }
+    /*println!("DEBUG: ctx: random_seed: {:?}", self.ctx.get_int("random_seed"));
+    println!("DEBUG: ctx: frame_skip: {:?}", self.ctx.get_int("frame_skip"));
+    println!("DEBUG: ctx: color_averaging: {:?}", self.ctx.get_bool("color_averaging"));
+    println!("DEBUG: ctx: repeat_action_probability: {:?}", self.ctx.get_float("repeat_action_probability"));*/
     self.lifelost = false;
 
       //let saved_state = self.ctx.save_system_state();
@@ -710,6 +777,40 @@ thread_local! {
 }
 
 #[derive(Clone)]
+pub struct ArcadeZeroObs {
+  pub dim:  (usize, usize, usize),
+}
+
+impl Extract<[u8]> for ArcadeZeroObs {
+  fn extract(&self, output: &mut [u8]) -> Result<usize, ()> {
+    if self.dim.flat_len() > output.len() {
+      println!("WARNING: ArcadeZeroObs: dimension mismatch while extracting input: {:?} {} {}", self.dim, self.dim.flat_len(), output.len());
+      assert!(self.dim.flat_len() <= output.len());
+    }
+    output[ .. self.dim.flat_len()].flatten_mut().set_constant(0);
+    Ok(self.dim.flat_len())
+  }
+}
+
+impl<A> EnvObsRepr<ArcadeZeroObs> for ArcadeEnv<A> where A: GenericArcadeAction {
+  fn observe(&self, _rng: &mut Xorshiftplus128Rng) -> ArcadeZeroObs {
+    let mut inner = self.inner.borrow_mut();
+    let mut dim = (160, 210);
+    if let Some(crop_screen) = inner.cfg.crop_screen {
+      let (crop_w, crop_h, _, _) = crop_screen;
+      dim = (crop_w, crop_h);
+    }
+    if let Some(resize_screen) = inner.cfg.resize_screen {
+      let (resize_w, resize_h) = resize_screen;
+      dim = (resize_w, resize_h);
+    }
+    ArcadeZeroObs{
+      dim:    (dim.0, dim.1, 1),
+    }
+  }
+}
+
+#[derive(Clone)]
 pub struct ArcadeGrayObs {
   pub dim:  (usize, usize, usize),
   pub buf:  Vec<u8>,
@@ -786,6 +887,21 @@ impl<A> EnvObsRepr<ArcadeGrayObs> for ArcadeEnv<A> where A: GenericArcadeAction 
       dim:    (dim.0, dim.1, 1),
       buf:    buf,
     }
+  }
+}
+
+impl Extract<[u8]> for ArcadeGrayObs {
+  fn extract(&self, output: &mut [u8]) -> Result<usize, ()> {
+    if self.dim.flat_len() != self.buf.len() {
+      println!("WARNING: ArcadeGrayObs: dimension mismatch: {:?} {} {}", self.dim, self.dim.flat_len(), self.buf.len());
+      assert_eq!(self.dim.flat_len(), self.buf.len());
+    }
+    if self.dim.flat_len() > output.len() {
+      println!("WARNING: ArcadeGrayObs: dimension mismatch while extracting input: {:?} {} {}", self.dim, self.dim.flat_len(), output.len());
+      assert!(self.dim.flat_len() <= output.len());
+    }
+    output[ .. self.dim.flat_len()].copy_from_slice(&self.buf);
+    Ok(self.dim.flat_len())
   }
 }
 
