@@ -15,7 +15,7 @@ extern "C" {}
 #[link(name = "z")]
 extern "C" {}
 
-#[link(name = "ale_cffi_static", kind = "static")]
+#[link(name = "ale_ffi_static", kind = "static")]
 extern "C" {
   pub fn ALEInterface_new() -> *mut ALEInterface;
   pub fn ALEInterface_delete(ale: *mut ALEInterface);
@@ -29,6 +29,7 @@ extern "C" {
   pub fn ALEInterface_setFloat(ale: *mut ALEInterface, key: *const c_char, value: c_float);
   pub fn ALEInterface_loadROM(ale: *mut ALEInterface, rom_file: *const c_char);
   pub fn ALEInterface_act(ale: *mut ALEInterface, action: c_int) -> c_int;
+  pub fn ALEInterface_act2(ale: *mut ALEInterface, actionA: c_int, actionB: c_int, rewardA: *mut c_int, rewardB: *mut c_int);
   pub fn ALEInterface_game_over(ale: *mut ALEInterface) -> c_int;
   pub fn ALEInterface_reset_game(ale: *mut ALEInterface);
   pub fn ALEInterface_getLegalActionSet(ale: *mut ALEInterface, actions: *mut c_int);

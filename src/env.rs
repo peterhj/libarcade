@@ -60,7 +60,7 @@ impl Default for ArcadeConfig {
 }
 
 pub trait GenericArcadeAction: DiscreteAction {
-  fn noop() -> Self where Self: Sized;
+  //fn noop() -> Self where Self: Sized;
   fn id(&self) -> i32;
 }
 
@@ -94,9 +94,9 @@ impl DiscreteAction for ArcadeAction {
 }
 
 impl GenericArcadeAction for ArcadeAction {
-  fn noop() -> ArcadeAction {
+  /*fn noop() -> ArcadeAction {
     ArcadeAction{id: 0}
-  }
+  }*/
 
   fn id(&self) -> i32 {
     self.id
@@ -138,9 +138,9 @@ impl DiscreteAction for FourArcadeAction {
 }
 
 impl GenericArcadeAction for FourArcadeAction {
-  fn noop() -> FourArcadeAction {
+  /*fn noop() -> FourArcadeAction {
     FourArcadeAction{idx: 0}
-  }
+  }*/
 
   fn id(&self) -> i32 {
     FOUR_ACTION_IDS[self.idx as usize]
@@ -149,7 +149,8 @@ impl GenericArcadeAction for FourArcadeAction {
 
 pub type BreakoutArcadeAction = FourArcadeAction;
 
-const SIX_ACTION_IDS: [i32; 6] = [0, 1, 3, 4, 11, 12];
+const SIX_ACTION_IDS:   [i32; 6] = [0, 1, 3, 4, 11, 12];
+const SIX_ACTION_B_IDS: [i32; 6] = [18, 18+1, 18+3, 18+4, 18+11, 18+12];
 
 #[derive(Clone, Copy)]
 pub struct SixArcadeAction {
@@ -184,9 +185,9 @@ impl DiscreteAction for SixArcadeAction {
 }
 
 impl GenericArcadeAction for SixArcadeAction {
-  fn noop() -> SixArcadeAction {
+  /*fn noop() -> SixArcadeAction {
     SixArcadeAction{idx: 0}
-  }
+  }*/
 
   fn id(&self) -> i32 {
     SIX_ACTION_IDS[self.idx as usize]
@@ -229,9 +230,9 @@ impl DiscreteAction for AllArcadeAction {
 }
 
 impl GenericArcadeAction for AllArcadeAction {
-  fn noop() -> AllArcadeAction {
+  /*fn noop() -> AllArcadeAction {
     AllArcadeAction{idx: 0}
-  }
+  }*/
 
   fn id(&self) -> i32 {
     self.idx as i32
@@ -557,7 +558,8 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
     self.ctx.set_float("repeat_action_probability", self.cfg.repeat_prob);
     //println!("DEBUG: ctx: frame_skip: {:?}", self.ctx.get_int("frame_skip"));
     //println!("DEBUG: ctx: random_seed: {:?}", self.ctx.get_int("random_seed"));
-    if self.rom_path.is_none() || &self.cfg.rom_path != self.rom_path.as_ref().unwrap() {
+    // FIXME(20170420): always load the ROM to reset settings.
+    /*if self.rom_path.is_none() || &self.cfg.rom_path != self.rom_path.as_ref().unwrap()*/ {
       assert!(self.ctx.open_rom(&self.cfg.rom_path).is_ok());
       self.rom_path = Some(self.cfg.rom_path.clone());
     }
@@ -641,6 +643,24 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
       //self.features.update(&mut self.ctx);
       Ok(Some(res as f32))
     //})
+  }
+
+  pub fn step2(&mut self, action1: &A, action2: &A) -> Result<(Option<f32>, Option<f32>), ()> {
+    let prev_lives = self.ctx.num_lives();
+    let mut res1 = 0;
+    let mut res2 = 0;
+    for _ in 0 .. self.cfg.skip_frames {
+      // TODO(20170420)
+      res1 += self.ctx.act(action1.id());
+      /*let (r1, r2) = self.ctx.act2(action1.id(), action2.id());
+      res1 += r1;
+      res2 += r2;*/
+    }
+    let next_lives = self.ctx.num_lives();
+    if next_lives < prev_lives {
+      self.lifelost = true;
+    }
+    Ok((Some(res1 as f32), Some(res2 as f32)))
   }
 
   pub fn save_png(&mut self, path: &Path) {

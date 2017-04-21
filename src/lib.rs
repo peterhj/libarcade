@@ -14,7 +14,7 @@ extern crate rand;
 use ffi::*;
 
 use libc::{c_int};
-use std::ffi::{CString};
+use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::ptr::{null_mut};
 
@@ -54,7 +54,11 @@ impl ArcadeContext {
   }
 
   pub fn get_string(&mut self, key: &str) -> String {
-    unimplemented!();
+    let c_key = CString::new(key.to_owned()).unwrap();
+    let res = unsafe { ALEInterface_getString(self.ptr, c_key.as_ptr()) };
+    assert!(!res.is_null());
+    let s = CString::from(unsafe { CStr::from_ptr(res) });
+    s.to_str().unwrap().to_owned()
   }
 
   pub fn get_int(&mut self, key: &str) -> i32 {
@@ -171,6 +175,13 @@ impl ArcadeContext {
 
   pub fn act(&mut self, action: i32) -> i32 {
     unsafe { ALEInterface_act(self.ptr, action) }
+  }
+
+  pub fn act2(&mut self, action_a: i32, action_b: i32) -> (i32, i32) {
+    let mut reward_a: i32 = 0;
+    let mut reward_b: i32 = 0;
+    unsafe { ALEInterface_act2(self.ptr, action_a, action_b, &mut reward_a as *mut _, &mut reward_b as *mut _); }
+    (reward_a, reward_b)
   }
 
   pub fn ram_size(&mut self) -> usize {

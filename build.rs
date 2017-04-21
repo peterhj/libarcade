@@ -20,7 +20,7 @@ fn main() {
   let cxx = env::var("CXX").unwrap_or(format!("g++"));
 
   let mut ale_lib_dst_path = PathBuf::from(&out_dir);
-  ale_lib_dst_path.push("libale_cffi_static.a");
+  ale_lib_dst_path.push("libale_ffi_static.a");
 
   {
     let mut ale_src_path = PathBuf::from(&manifest_dir);
