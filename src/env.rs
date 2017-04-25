@@ -563,14 +563,17 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
       assert!(self.ctx.open_rom(&self.cfg.rom_path).is_ok());
       self.rom_path = Some(self.cfg.rom_path.clone());
     }
-    if !self.lifelost || self.ctx.is_game_over() {
+    // FIXME(20170425): always disable soft reset for now.
+    /*if !self.lifelost || self.ctx.is_game_over() {
       self.ctx.reset();
-    }
+    }*/
+    self.ctx.reset();
+    self.lifelost = false;
+
     /*println!("DEBUG: ctx: random_seed: {:?}", self.ctx.get_int("random_seed"));
     println!("DEBUG: ctx: frame_skip: {:?}", self.ctx.get_int("frame_skip"));
     println!("DEBUG: ctx: color_averaging: {:?}", self.ctx.get_bool("color_averaging"));
     println!("DEBUG: ctx: repeat_action_probability: {:?}", self.ctx.get_float("repeat_action_probability"));*/
-    self.lifelost = false;
 
       //let saved_state = self.ctx.save_system_state();
       //self.state = Some(saved_state);
@@ -645,7 +648,7 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
     //})
   }
 
-  pub fn step2(&mut self, action1: &A, action2: &A) -> Result<(Option<f32>, Option<f32>), ()> {
+  /*pub fn step2(&mut self, action1: &A, action2: &A) -> Result<(Option<f32>, Option<f32>), ()> {
     let prev_lives = self.ctx.num_lives();
     let mut res1 = 0;
     let mut res2 = 0;
@@ -661,7 +664,7 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
       self.lifelost = true;
     }
     Ok((Some(res1 as f32), Some(res2 as f32)))
-  }
+  }*/
 
   pub fn save_png(&mut self, path: &Path) {
     let frame_sz = 160 * 210;
