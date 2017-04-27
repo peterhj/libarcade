@@ -477,6 +477,7 @@ pub struct ArcadeEnvInner<A> {
   //state:    Option<ArcadeSavedState>,
   //features: F,
   lifelost: bool,
+  terminal: bool,
   _marker:  PhantomData<A>,
 }
 
@@ -569,6 +570,7 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
     }*/
     self.ctx.reset();
     self.lifelost = false;
+    self.terminal = false;
 
     /*println!("DEBUG: ctx: random_seed: {:?}", self.ctx.get_int("random_seed"));
     println!("DEBUG: ctx: frame_skip: {:?}", self.ctx.get_int("frame_skip"));
@@ -608,7 +610,7 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
       } else {
         unreachable!();
       }*/
-      self.ctx.is_game_over() || self.lifelost
+      self.terminal || self.lifelost
     //})
   }
 
@@ -637,10 +639,14 @@ impl<A> ArcadeEnvInner<A> where A: GenericArcadeAction {
       //let res = self.ctx.act(action.id());
       for _ in 0 .. self.cfg.skip_frames {
         res += self.ctx.act(action.id());
-      }
-      let next_lives = self.ctx.num_lives();
-      if next_lives < prev_lives {
-        self.lifelost = true;
+        let next_lives = self.ctx.num_lives();
+        if next_lives < prev_lives {
+          self.lifelost = true;
+        }
+        if self.ctx.is_game_over() {
+          self.terminal = true;
+          break;
+        }
       }
       //self.state = Some(self.ctx.save_system_state());
       //self.features.update(&mut self.ctx);
@@ -703,6 +709,7 @@ impl<A> Default for ArcadeEnv<A> where A: GenericArcadeAction {
         //state:      None,
         //features:   Default::default(),
         lifelost:   false,
+        terminal:   false,
         _marker:    PhantomData,
       }),
     }
